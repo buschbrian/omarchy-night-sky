@@ -11,11 +11,13 @@ Item {
   property bool south: false
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
-  readonly property color sunColor: "#f2b347"
-  readonly property color moonColor: "#ece6d2"
-  readonly property color coreColor: "#72d6db"
+  property color sunColor: "#f2b347"
+  property color moonColor: "#ece6d2"
+  property color coreColor: "#72d6db"
+  property var bandColors: ({ golden: "#dba254", blue: "#507fc4", twilight: "#354568", dark: "#141e33", day: "#8fb4d9" })
+  // The right gutter holds the HZN / 10° marks here and the lane readouts below the chart.
   readonly property real plotLeft: Style.space(52)
-  readonly property real plotWidth: Math.max(1, width - plotLeft - Style.space(32))
+  readonly property real plotWidth: Math.max(1, width - plotLeft - Style.space(60))
   readonly property var series: [
     { key: "sun", name: "Sun", glyph: "󰖨", tone: sunColor },
     { key: "moon", name: "Moon", glyph: "󰽢", tone: moonColor },
@@ -29,7 +31,7 @@ Item {
   readonly property string selectedTime: timeline && timeline.times ? timeline.times[selectedIndex] : "–"
   readonly property string selectedPhase: {
     var band = timeline ? timeline.sky.find(function(b) { return selectedAt >= b.a && selectedAt <= b.b }) : null
-    return band ? ({ golden: "Golden hour", blue: "Blue hour", twilight: "Twilight", dark: "Astronomical dark", day: "Daylight" })[band.kind] : ""
+    return band ? ({ golden: "Golden hour", blue: "Blue hour", twilight: "Twilight", dark: "Night", day: "Daylight" })[band.kind] : ""
   }
   readonly property real altitudeTop: {
     var high = 20
@@ -89,23 +91,23 @@ Item {
       Repeater {
         model: root.series
         Column {
+          id: readoutItem
           required property var modelData
           width: (body.width - Style.space(16)) / 3
           spacing: Style.space(3)
           Row {
             spacing: Style.space(4)
-            Text { text: parent.parent.modelData.glyph; color: parent.parent.modelData.tone; font.family: root.fontFamily; font.pixelSize: Style.font.body }
-            Text { text: parent.parent.modelData.name; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+            Text { text: readoutItem.modelData.glyph; color: readoutItem.modelData.tone; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+            Text { text: readoutItem.modelData.name; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
           }
           Text {
-            readonly property var value: root.altitude(parent.modelData.key)
+            readonly property var value: root.altitude(readoutItem.modelData.key)
             text: value === null ? "–" : (value > 0 ? "+" : "") + value.toFixed(1) + "°" + (value < 0 ? " · below" : " · above")
-            color: parent.modelData.tone
+            color: readoutItem.modelData.tone
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             font.bold: true
           }
-
         }
       }
     }
@@ -120,7 +122,7 @@ Item {
           x: root.plotLeft + modelData.a * root.plotWidth
           width: Math.max(1, (modelData.b - modelData.a) * root.plotWidth)
           height: parent.height
-          color: ({ golden: "#dba254", blue: "#507fc4", twilight: "#354568", dark: "#141e33", day: "#8fb4d9" })[modelData.kind]
+          color: root.bandColors[modelData.kind]
           Text {
             anchors.centerIn: parent
             text: parent.modelData.kind === "dark" ? "NIGHT" : parent.modelData.kind.toUpperCase()
@@ -194,7 +196,7 @@ Item {
           skyShade.addColorStop(0, "#080e1b"); skyShade.addColorStop(0.65, "#1b2b40"); skyShade.addColorStop(1, "#0b111c")
           ctx.fillStyle = skyShade; ctx.fillRect(0, 0, w, h)
           for (var band of chart.sky) {
-            ctx.fillStyle = ({ golden: "#dba254", blue: "#507fc4", twilight: "#354568", dark: "#141e33", day: "#8fb4d9" })[band.kind]
+            ctx.fillStyle = root.bandColors[band.kind]
             ctx.globalAlpha = band.kind === "golden" ? 0.12 : 0.3
             ctx.fillRect(band.a * w, 0, (band.b - band.a) * w, h); ctx.globalAlpha = 1
           }
@@ -221,9 +223,9 @@ Item {
             ctx.fillStyle = best.level === "go" ? "rgba(76,175,122,0.12)" : "rgba(227,179,65,0.12)"; ctx.fillRect(left, 0, right - left, h)
             ctx.fillStyle = best.level === "go" ? "#4caf7a" : "#e3b341"; ctx.fillRect(left, 0, right - left, Style.space(3))
           }
-          for (var body of root.series) {
-            ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, y0); ctx.clip(); path(ctx, chart.curves[body.key], body.tone, 2.2, 0.9, false); ctx.restore()
-            ctx.save(); ctx.beginPath(); ctx.rect(0, y0, w, h - y0); ctx.clip(); path(ctx, chart.curves[body.key], body.tone, 1.4, 0.55, true); ctx.restore()
+          for (var series of root.series) {
+            ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, y0); ctx.clip(); path(ctx, chart.curves[series.key], series.tone, 2.2, 0.9, false); ctx.restore()
+            ctx.save(); ctx.beginPath(); ctx.rect(0, y0, w, h - y0); ctx.clip(); path(ctx, chart.curves[series.key], series.tone, 1.4, 0.55, true); ctx.restore()
           }
           for (var usable of chart.core) {
             ctx.save(); ctx.beginPath(); ctx.rect(usable.a * w, 0, (usable.b - usable.a) * w, y0); ctx.clip()
@@ -246,13 +248,16 @@ Item {
         }
       }
       Repeater {
-        model: root.altitudeTop <= 45 ? [30, 15, 0, -15] : [60, 30, 0, -15]
+        model: {
+          var marks = [-15], every = root.altitudeTop <= 45 ? 15 : 30
+          for (var alt = 0; alt <= root.altitudeTop; alt += every) marks.push(alt)
+          return marks
+        }
         Text {
           required property var modelData
           x: canvas.x - implicitWidth - Style.space(8)
           y: canvas.yOf(modelData) - implicitHeight / 2
-          visible: modelData <= root.altitudeTop
-          text: modelData === 0 ? "0°" : modelData + "°"
+          text: modelData + "°"
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -263,14 +268,5 @@ Item {
       Rectangle { anchors.fill: canvas; color: "transparent"; border.width: root.activeFocus ? 2 : 1; border.color: root.activeFocus ? root.coreColor : "#344158" }
     }
 
-    Item {
-      width: parent.width
-      height: Style.space(16)
-      Repeater {
-        model: root.timeline ? root.timeline.ticks : []
-        Text { required property var modelData; x: root.plotLeft + modelData.at * root.plotWidth - implicitWidth / 2; text: modelData.label + ":00"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-      }
-    }
-    Text { width: parent.width; text: "Hover / ← →: inspect time · bold core: moon down, ≥10° · dashed: below horizon"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap }
   }
 }

@@ -6,17 +6,20 @@ A bar widget for the [Omarchy](https://omarchy.org) shell, made for planning nig
 
 The pill shows the next sunrise or sunset, tonight's moon phase and how long the moon-free darkness lasts. A cloud glyph appears when the dark hours are mostly clouded over, and an aurora glyph when the Kp forecast reaches your threshold. The pill is highlighted on a night rated "go".
 
-Click it for the night panel. **Tonight** has:
+Click it for the night panel. The top of the panel answers, in order: which night and where (‹ › step nights, **Tonight** returns, the location button opens Locations, 󰑐 refreshes), what you are shooting (Milky Way, meteors, aurora or moonlit), and whether it is worth going: the verdict, the best interval and the moon. Three tabs follow.
+
+**Night** has:
 
 - **A shoot verdict**: go, marginal or no-go, plus the factor that decides it ("No-go · clouds 95%"). It uses a worst-factor rule over the moon-free dark window. The factors that can block a night are moon-free time, mean and worst-hour cloud, haze (aerosol optical depth) and wind gusts. Dew, core altitude and the jet stream are shown as advice. Missing hourly coverage or cloud/haze forecasts older than six hours keep the night at "marginal" at best. Kp does not lower the whole-window assessment; it flags an aurora opportunity.
 - **Photography modes**: Milky Way requires the core above 10° in moon-free astronomical darkness; meteors use the highest-ZHR active curated shower with its radiant above 10° in moon-free darkness; aurora uses astronomical darkness without requiring the moon to be down; moonlit landscapes use the moon above the horizon, at least 10% lit, with the sun below −6°. The mode assessment covers all target intervals, with a one-hour interval rated good and 30 minutes marginal. The core altitude gates Milky Way mode only. Meteor mode names unverified curated showers explicitly.
 - **A best interval**, separate from the whole-window assessment. It searches at five-minute resolution, excludes elapsed time, and ranks intervals of at least 30 minutes by rating, then complete/fresh coverage, duration, and earlier start. It considers both clear runs and longer mixed runs, so a clear hour can win over an otherwise marginal night. The selected interval is outlined on the chart, with its cloud cover, direction and duration. Aurora intervals additionally need overlapping Kp at or above your threshold; stale Kp keeps an interval marginal. Missing weather produces a provisional interval, never a confident go.
-- **A sky chart** from evening golden hour to the end of morning golden hour, coloured by the sun's altitude: golden hour (+6° to −4°), blue hour (−4° to −6°), twilight, and night. A compact recessed sky chart with shaded object markers and a perspective ground grid keeps the altitude scale flat and accurate. Distinct amber sun, ivory moon and cyan Milky Way core paths share an adaptive altitude scale, a clear horizon and a 10° core guide. Below-horizon paths are dashed. Hover or drag to inspect all three altitudes at a location-local time; click to pin the cursor, or focus the chart and use arrow keys (Home/End jump to the edges). The moon marker shows its phase. The core line is bold where it is at least 10° up in moon-free dark, and a red line marks now.
+- **A sky chart** from evening golden hour to the end of morning golden hour, coloured by the sun's altitude: golden hour (+6° to −4°), blue hour (−4° to −6°), twilight, and night. Amber sun, ivory moon and cyan Milky Way core paths share an altitude scale that grows with the highest object, with the horizon and a 10° core guide marked. Below-horizon paths are dashed. Hover or drag to inspect all three altitudes at a location-local time; click to pin the cursor, or focus the chart and use arrow keys (Home/End jump to the edges). The moon marker shows its phase. The core line is bold where it is at least 10° up in moon-free dark, and a red line marks now.
 - **Lanes** along the same time axis:
   - cloud by layer (high, mid, low)
   - a seeing proxy from the 250 hPa jet-stream wind
   - planetary Kp in 3-hour bins
-- **Every factor** behind the whole-window verdict, coloured by its rating, plus separate update ages for clouds/wind, haze and Kp. Missing data and stale forecasts are labelled beside those sources.
+- **Every factor** behind the whole-window verdict, coloured by its rating, at the top of the tab. Gating factors carry a dot.
+- **One update line** with the age of the clouds/wind, haze and Kp data. It turns red when any of them is stale, and missing data is labelled.
 - **Evening and morning times**: golden hour, sunset, blue hour, astronomical dark, dawn and sunrise.
 - **Where to point**:
   - the core's best time, altitude and direction
@@ -32,7 +35,7 @@ Click it for the night panel. **Tonight** has:
   - meteor showers, judged where you are: does the radiant clear 10° in darkness, how long is it up with the moon down, and is a nearby night better?
   - curated festivals
 
-**Locations** saves named latitude, longitude and IANA time-zone entries in `~/.config/omarchy/night-sky-locations.json` (or under `XDG_CONFIG_HOME`). Use the displayed location to fill the form, or enter another destination. Reusing a name replaces it; Remove deletes that saved entry. Switch locations in the tab, or compare the displayed and saved locations for the same evening date and photography mode. All chart times and dates use each location's zone, shown in the header and comparison. The initial location still comes from widget settings or Omarchy weather. Saved locations stay out of the plugin repository.
+**Locations** lists the default location (widget settings or Omarchy weather) and your saved places. Click one to show its sky, or use the bin icon to remove it. **Compare this night** rates every place for the same evening and subject. Below the list, **Add a location** saves a name, latitude, longitude and IANA time zone to `~/.config/omarchy/night-sky-locations.json` (or under `XDG_CONFIG_HOME`). **Copy displayed location** fills the form, and saving an existing name replaces it. All chart times and dates use each location's zone, shown in the header and comparison. The initial location still comes from widget settings or Omarchy weather. Saved locations stay out of the plugin repository.
 
 ‹ › step to other nights. The wheel scrolls long panels. Right click the pill or click the panel's refresh button to recalculate; network requests retain the hourly cache limit. Escape closes the panel. Mode/location selections last for the widget session; set their defaults in widget settings to retain them across shell restarts.
 
@@ -55,7 +58,7 @@ The helper supports `--save-location NAME --lat LAT --lon LON --tz ZONE`, `--lis
 | Latitude / Longitude | empty | Decimal degrees. Empty uses the location set in Omarchy's weather panel. |
 | Photography mode | milky-way | Default subject; change it in the panel during a session. |
 | Location name / Time zone | empty | Name for configured coordinates; IANA zone, e.g. America/Denver. Empty zone uses the system zone. |
-| Default saved location | empty | Exact name saved in the Locations tab; empty uses configured coordinates or weather. |
+| Default saved location | empty | Exact name saved in the Locations tab; empty uses configured coordinates or weather. A name that no longer exists falls back to those. |
 | Aurora Kp | 6 | Kp that flags an aurora chance. About 6 near 40–45° latitude; lower further poleward. |
 | Clouds and Kp | on | Off keeps the widget fully offline (astronomy only). |
 | Lens focal length, aperture, pixel pitch, crop factor | off | For the exposure helper. Focal length alone gives the 500 rule; add aperture and pixel pitch for the NPF rule at the core's declination. |
@@ -82,9 +85,8 @@ python3 bin/night-sky --bar --lat 40.76 --lon -111.89 --date 2026-10-20 | python
 omarchy plugin validate .
 ```
 
+QML changes may need `omarchy restart shell`; hot reload can keep the previous component.
+
 ## License
 
 MIT
-
-
-Local verification includes the offline regression suite and manifest validation. Native panel checks use the running Omarchy shell; a shell restart may be needed if hot reload retains the previous QML component. Screenshots and local destinations are not committed.

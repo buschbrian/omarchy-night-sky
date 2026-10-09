@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 import tempfile
 import io
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 path = Path(__file__).resolve().parents[1] / 'bin/night-sky'
 loader = importlib.machinery.SourceFileLoader('night_sky', str(path))
@@ -348,6 +348,12 @@ class PhotographyPlanning(unittest.TestCase):
                                   mode='meteors', windows=[(self.start, self.end)], now=self.now)
         self.assertEqual(whole['level'], 'marginal')
 
+    def test_headline_names_clouds_once(self):
+        cloudy = self.best([dict(h, total=40) for h in self.hours])['headline']
+        self.assertIn('Marginal · clouds 40%', cloudy)
+        self.assertEqual(cloudy.count('clouds'), 1)
+        self.assertIn('Go · clouds 5%', self.best()['headline'])
+
     def test_complete_marginal_window_beats_longer_unknown_window(self):
         self.start += timedelta(minutes=15)
         best = self.best(self.hours[:1])
@@ -481,6 +487,15 @@ class SavedLocations(unittest.TestCase):
             self.assertEqual([p['location']['tz'] for p in out['comparison']], ['America/Denver', 'Australia/Sydney'])
             self.assertTrue(all(p['date'] == '2026-12-21' for p in out['comparison']))
             self.assertFalse(any(p['shoot']['level'] == 'go' for p in out['comparison']))
+
+    def test_missing_saved_location_falls_back_instead_of_blanking_the_bar(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(sky, 'LOCATIONS', Path(d) / 'places.json'), \
+                redirect_stderr(io.StringIO()) as err:
+            out = self.run_cli(['--bar', '--offline', '--saved-location', 'Removed place', '--date', '2026-10-09',
+                                '--lat', '40.76', '--lon', '-111.89', '--tz', 'America/Denver'])
+        self.assertIn('Removed place', err.getvalue())
+        self.assertEqual(out['panel']['location']['tz'], 'America/Denver')
+        self.assertEqual(out['panel']['subject'], 'Milky Way core')
 
 
 if __name__ == '__main__':

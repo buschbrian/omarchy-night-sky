@@ -800,9 +800,11 @@ def best_window(plan, report, lat, lon, hours, fetched, kp, mode, curated, auror
     elif mode == 'meteors':
         direction = 'wide sky'
     cloud = next((f['value'] for f in v['factors'] if f['key'] == 'cloud_cover_total'), '—')
+    # The verdict already names clouds when they decide it.
+    clouds = '' if f'clouds {cloud}' in v['headline'] else f' · clouds {cloud}'
     return {'start': iso(a, plan['tz']), 'end': iso(b, plan['tz']), 'start_ms': int(a.timestamp() * 1000),
             'end_ms': int(b.timestamp() * 1000), 'minutes': round(minutes((a, b))), 'level': v['level'],
-            'headline': f"{fmt_time(a, plan)}–{fmt_time(b, plan)} · {v['headline']} · clouds {cloud} · {direction}",
+            'headline': f"{fmt_time(a, plan)}–{fmt_time(b, plan)} · {v['headline']}{clouds} · {direction}",
             'subject': subject, 'direction': direction, 'factors': v['factors'],
             'incomplete': v['incomplete'], 'stale': v['stale']}
 
@@ -1004,7 +1006,7 @@ def kp_rows(products, now):
 
 
 def bar_output(report, sun=None, lat=None, lon=None, clouds=None, kp=None, aurora_kp=AURORA_KP,
-               fetched=None, curated=None, optics=None, extras=True, mode="milky-way", now=None, location_name=None,
+               fetched=None, curated=None, optics=None, extras=True, mode='milky-way', now=None, location_name=None,
                kp_fetched=None, saved_locations=None):
     now = now or datetime.now(timezone.utc)
     if isinstance(fetched, dict):
@@ -1047,7 +1049,8 @@ def bar_output(report, sun=None, lat=None, lon=None, clouds=None, kp=None, auror
         target = target_windows(plan, lat, lon, mode, curated)[0]
         selected_hours = hours_in(clouds, target)
         out['panel'] = {
-            'date': report['date'], 'verdict': summary_line, 'mode': mode, 'mode_label': MODES[mode],
+            'date': report['date'], 'verdict': summary_line, 'subject': subject, 'mode': mode,
+            'mode_label': MODES[mode],
             'location': {**report['location'], 'name': location_name or f'{lat:.3f}, {lon:.3f}'},
             'best_window': best, 'saved_locations': saved_locations or [],
             'sources': {
@@ -1190,8 +1193,11 @@ def main(argv=None):
     if args.saved_location:
         place = next((p for p in places if p['name'] == args.saved_location), None)
         if place is None:
-            ap.error('Saved location not found')
-        args.lat, args.lon, args.tz, args.location_name = place['lat'], place['lon'], place['tz'], place['name']
+            # A removed place named in the widget settings falls back rather than blanking the bar.
+            print(f'night-sky: saved location {args.saved_location!r} not found; using the configured location',
+                  file=sys.stderr)
+        else:
+            args.lat, args.lon, args.tz, args.location_name = place['lat'], place['lon'], place['tz'], place['name']
     if (args.lat is None) != (args.lon is None):
         ap.error('--lat and --lon go together')
     here = (args.lat, args.lon) if args.lat is not None else read_location()
