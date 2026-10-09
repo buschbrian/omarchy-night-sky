@@ -298,7 +298,7 @@ BarWidget {
     owner: root
     open: root.popupOpen && root.panel !== null
     contentWidth: popup.fittedContentWidth(Style.space(540))
-    contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(760))
+    contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(620))
 
     FocusScope {
       anchors.fill: parent

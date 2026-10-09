@@ -75,7 +75,7 @@ Item {
   Column {
     id: body
     width: parent.width
-    spacing: Style.space(8)
+    spacing: Style.space(6)
 
     Row {
       width: parent.width
@@ -99,19 +99,13 @@ Item {
           }
           Text {
             readonly property var value: root.altitude(parent.modelData.key)
-            text: value === null ? "–" : (value > 0 ? "+" : "") + value.toFixed(1) + "°"
+            text: value === null ? "–" : (value > 0 ? "+" : "") + value.toFixed(1) + "°" + (value < 0 ? " · below" : " · above")
             color: parent.modelData.tone
             font.family: root.fontFamily
-            font.pixelSize: Style.font.subtitle
+            font.pixelSize: Style.font.body
             font.bold: true
           }
-          Text {
-            readonly property var value: root.altitude(parent.modelData.key)
-            text: value === null ? "Unavailable" : value < 0 ? "Below horizon" : parent.modelData.key === "core" && value < 10 ? "Low on horizon" : "Above horizon"
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
+
         }
       }
     }
@@ -142,7 +136,7 @@ Item {
     Item {
       id: plot
       width: parent.width
-      height: Style.space(220)
+      height: Style.space(145)
       Canvas {
         id: canvas
         x: root.plotLeft
@@ -174,7 +168,9 @@ Item {
           var r = Style.space(5)
           ctx.fillStyle = "#101725"; ctx.strokeStyle = tone; ctx.lineWidth = 2
           ctx.beginPath(); ctx.arc(x, y, r + 3, 0, Math.PI * 2); ctx.fill()
-          ctx.fillStyle = tone
+          var globe = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, 0, x, y, r + 1)
+          globe.addColorStop(0, "#fff9e8"); globe.addColorStop(0.45, tone); globe.addColorStop(1, "#343b48")
+          ctx.fillStyle = globe
           if (key === "core") {
             ctx.beginPath(); ctx.moveTo(x, y - r - 2); ctx.lineTo(x + 2, y - 2); ctx.lineTo(x + r + 2, y); ctx.lineTo(x + 2, y + 2)
             ctx.lineTo(x, y + r + 2); ctx.lineTo(x - 2, y + 2); ctx.lineTo(x - r - 2, y); ctx.lineTo(x - 2, y - 2); ctx.closePath(); ctx.fill()
@@ -194,13 +190,25 @@ Item {
           if (!chart) return
           var w = width, h = height, y0 = yOf(0)
           ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip()
-          ctx.fillStyle = "#101725"; ctx.fillRect(0, 0, w, h)
+          var skyShade = ctx.createLinearGradient(0, 0, 0, h)
+          skyShade.addColorStop(0, "#080e1b"); skyShade.addColorStop(0.65, "#1b2b40"); skyShade.addColorStop(1, "#0b111c")
+          ctx.fillStyle = skyShade; ctx.fillRect(0, 0, w, h)
           for (var band of chart.sky) {
             ctx.fillStyle = ({ golden: "#dba254", blue: "#507fc4", twilight: "#354568", dark: "#141e33", day: "#8fb4d9" })[band.kind]
             ctx.globalAlpha = band.kind === "golden" ? 0.12 : 0.3
             ctx.fillRect(band.a * w, 0, (band.b - band.a) * w, h); ctx.globalAlpha = 1
           }
-          ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fillRect(0, y0, w, h - y0)
+          var groundShade = ctx.createLinearGradient(0, y0, 0, h)
+          groundShade.addColorStop(0, "#253341"); groundShade.addColorStop(1, "#0a1018")
+          ctx.fillStyle = groundShade; ctx.fillRect(0, y0, w, h - y0)
+          ctx.strokeStyle = "rgba(172,193,213,0.12)"; ctx.lineWidth = 1
+          for (var depth = 1; depth <= 4; depth++) {
+            var groundY = y0 + (h - y0) * Math.pow(depth / 4, 2)
+            ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(w, groundY); ctx.stroke()
+          }
+          for (var lane = -3; lane <= 7; lane++) {
+            ctx.beginPath(); ctx.moveTo(w / 2 + (lane - 2) * w / 20, y0); ctx.lineTo(lane * w / 4, h); ctx.stroke()
+          }
           ctx.strokeStyle = "rgba(230,237,245,0.12)"; ctx.lineWidth = 1
           for (var alt = 15; alt <= root.altitudeTop; alt += 15) { ctx.beginPath(); ctx.moveTo(0, yOf(alt)); ctx.lineTo(w, yOf(alt)); ctx.stroke() }
           for (var tick of chart.ticks) { ctx.beginPath(); ctx.moveTo(tick.at * w, 0); ctx.lineTo(tick.at * w, h); ctx.stroke() }
@@ -263,6 +271,6 @@ Item {
         Text { required property var modelData; x: root.plotLeft + modelData.at * root.plotWidth - implicitWidth / 2; text: modelData.label + ":00"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
       }
     }
-    Text { width: parent.width; text: "Move over the chart or use ← → to inspect time. Bold core: moon down and ≥10°. Dashed paths: below horizon."; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap }
+    Text { width: parent.width; text: "Hover / ← →: inspect time · bold core: moon down, ≥10° · dashed: below horizon"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap }
   }
 }
