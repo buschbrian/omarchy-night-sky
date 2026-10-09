@@ -11,6 +11,7 @@ Item {
   property bool south: false
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
+  property real iconSize: Style.font.icon
   property color sunColor: "#f2b347"
   property color moonColor: "#ece6d2"
   property color coreColor: "#72d6db"
@@ -73,17 +74,20 @@ Item {
   function altitude(key) { return timeline && timeline.curves[key].length ? timeline.curves[key][selectedIndex][1] : null }
   function readout(key) { var a = altitude(key); return key + " " + (a === null ? "unavailable" : a.toFixed(1) + " degrees " + (a >= 0 ? "above horizon" : "below horizon")) }
   function rgba(c, alpha) { return Qt.rgba(c.r, c.g, c.b, alpha) }
+  // One horizontal gradient through the middle of each sun-altitude band, so golden fades into blue into night.
+  function skyGradient(ctx, w, alpha) {
+    var g = ctx.createLinearGradient(0, 0, w, 0)
+    for (var band of timeline.sky) {
+      var c = Qt.lighter(bandColors[band.kind], 1)
+      g.addColorStop(Math.max(0, Math.min(1, (band.a + band.b) / 2)), rgba(c, alpha))
+    }
+    return g
+  }
 
   Column {
     id: body
     width: parent.width
     spacing: Style.space(6)
-
-    Row {
-      width: parent.width
-      Text { text: "Sky altitude"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.bold: true }
-      Text { text: "  ·  " + root.selectedTime + "  ·  " + root.selectedPhase; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption; anchors.verticalCenter: parent.verticalCenter }
-    }
 
     Row {
       width: parent.width
@@ -97,16 +101,18 @@ Item {
           spacing: Style.space(3)
           Row {
             spacing: Style.space(4)
-            Text { text: readoutItem.modelData.glyph; color: readoutItem.modelData.tone; font.family: root.fontFamily; font.pixelSize: Style.font.body }
-            Text { text: readoutItem.modelData.name; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-          }
-          Text {
-            readonly property var value: root.altitude(readoutItem.modelData.key)
-            text: value === null ? "–" : (value > 0 ? "+" : "") + value.toFixed(1) + "°" + (value < 0 ? " · below" : " · above")
-            color: readoutItem.modelData.tone
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
+            Text { width: Style.space(18); text: readoutItem.modelData.glyph; color: readoutItem.modelData.tone; font.family: root.fontFamily; font.pixelSize: root.iconSize }
+            Column {
+              Text { text: readoutItem.modelData.name; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+              Text {
+                readonly property var value: root.altitude(readoutItem.modelData.key)
+                text: value === null ? "–" : (value > 0 ? "+" : "") + value.toFixed(1) + "°" + (value < 0 ? " below" : "")
+                color: readoutItem.modelData.tone
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+              }
+            }
           }
         }
       }
@@ -115,19 +121,34 @@ Item {
     Item {
       width: parent.width
       height: Style.space(14)
+      Canvas {
+        id: strip
+        x: root.plotLeft
+        width: root.plotWidth
+        height: parent.height
+        property var chart: root.timeline
+        onChartChanged: requestPaint()
+        onWidthChanged: requestPaint()
+        onPaint: {
+          var ctx = getContext("2d"); ctx.reset()
+          if (!chart) return
+          ctx.fillStyle = root.skyGradient(ctx, width, 1)
+          ctx.fillRect(0, 0, width, height)
+        }
+      }
       Repeater {
         model: root.timeline ? root.timeline.sky : []
-        Rectangle {
+        Item {
+          id: bandLabel
           required property var modelData
           x: root.plotLeft + modelData.a * root.plotWidth
           width: Math.max(1, (modelData.b - modelData.a) * root.plotWidth)
           height: parent.height
-          color: root.bandColors[modelData.kind]
           Text {
             anchors.centerIn: parent
-            text: parent.modelData.kind === "dark" ? "NIGHT" : parent.modelData.kind.toUpperCase()
+            text: ({ golden: "Golden", blue: "Blue", twilight: "Twilight", dark: "Night", day: "Day" })[bandLabel.modelData.kind]
             visible: implicitWidth + Style.space(8) < parent.width
-            color: "#f3f6fb"
+            color: Qt.rgba(1, 1, 1, 0.85)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -195,22 +216,11 @@ Item {
           var skyShade = ctx.createLinearGradient(0, 0, 0, h)
           skyShade.addColorStop(0, "#080e1b"); skyShade.addColorStop(0.65, "#1b2b40"); skyShade.addColorStop(1, "#0b111c")
           ctx.fillStyle = skyShade; ctx.fillRect(0, 0, w, h)
-          for (var band of chart.sky) {
-            ctx.fillStyle = root.bandColors[band.kind]
-            ctx.globalAlpha = band.kind === "golden" ? 0.12 : 0.3
-            ctx.fillRect(band.a * w, 0, (band.b - band.a) * w, h); ctx.globalAlpha = 1
-          }
+          ctx.fillStyle = root.skyGradient(ctx, w, 0.3)
+          ctx.fillRect(0, 0, w, h)
           var groundShade = ctx.createLinearGradient(0, y0, 0, h)
           groundShade.addColorStop(0, "#253341"); groundShade.addColorStop(1, "#0a1018")
           ctx.fillStyle = groundShade; ctx.fillRect(0, y0, w, h - y0)
-          ctx.strokeStyle = "rgba(172,193,213,0.12)"; ctx.lineWidth = 1
-          for (var depth = 1; depth <= 4; depth++) {
-            var groundY = y0 + (h - y0) * Math.pow(depth / 4, 2)
-            ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(w, groundY); ctx.stroke()
-          }
-          for (var lane = -3; lane <= 7; lane++) {
-            ctx.beginPath(); ctx.moveTo(w / 2 + (lane - 2) * w / 20, y0); ctx.lineTo(lane * w / 4, h); ctx.stroke()
-          }
           ctx.strokeStyle = "rgba(230,237,245,0.12)"; ctx.lineWidth = 1
           for (var alt = 15; alt <= root.altitudeTop; alt += 15) { ctx.beginPath(); ctx.moveTo(0, yOf(alt)); ctx.lineTo(w, yOf(alt)); ctx.stroke() }
           for (var tick of chart.ticks) { ctx.beginPath(); ctx.moveTo(tick.at * w, 0); ctx.lineTo(tick.at * w, h); ctx.stroke() }
@@ -265,7 +275,7 @@ Item {
       }
       Text { x: canvas.x + canvas.width + Style.space(4); y: canvas.yOf(0) - implicitHeight / 2; text: "HZN"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
       Text { x: canvas.x + canvas.width + Style.space(4); y: canvas.yOf(10) - implicitHeight / 2; text: "10°"; color: root.coreColor; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-      Rectangle { anchors.fill: canvas; color: "transparent"; border.width: root.activeFocus ? 2 : 1; border.color: root.activeFocus ? root.coreColor : "#344158" }
+      Rectangle { anchors.fill: canvas; color: "transparent"; border.width: root.activeFocus ? 2 : 1; border.color: root.activeFocus ? root.coreColor : root.rgba(root.foreground, 0.15) }
     }
 
   }

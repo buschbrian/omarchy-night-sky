@@ -6,7 +6,7 @@ A bar widget for the [Omarchy](https://omarchy.org) shell, made for planning nig
 
 The pill shows the next sunrise or sunset, tonight's moon phase and how long the moon-free darkness lasts. A cloud glyph appears when the dark hours are mostly clouded over, and an aurora glyph when the Kp forecast reaches your threshold. The pill is highlighted on a night rated "go".
 
-Click it for the night panel. The top of the panel answers, in order: which night and where (‹ › step nights, **Tonight** returns, the location button opens Locations, 󰑐 refreshes), what you are shooting (Milky Way, meteors, aurora or moonlit), and whether it is worth going: the verdict, the best interval and the moon. Three tabs follow.
+Click it for the night panel. The top of the panel answers, in order: which night and where (‹ › step nights, "back to tonight" returns, the location name opens Locations, 󰑐 refreshes), what you are shooting (Milky Way, meteors, aurora or moonlit), and whether it is worth going: the verdict, the best interval and the moon. Three tabs follow, each split into labelled sections.
 
 **Night** has:
 
@@ -18,7 +18,7 @@ Click it for the night panel. The top of the panel answers, in order: which nigh
   - cloud by layer (high, mid, low)
   - a seeing proxy from the 250 hPa jet-stream wind
   - planetary Kp in 3-hour bins
-- **Every factor** behind the whole-window verdict, coloured by its rating, at the top of the tab. Gating factors carry a dot.
+- **Conditions**: every factor behind the whole-window verdict, with marginal and poor values coloured. Factors that only advise have italic labels.
 - **One update line** with the age of the clouds/wind, haze and Kp data. It turns red when any of them is stale, and missing data is labelled.
 - **Evening and morning times**: golden hour, sunset, blue hour, astronomical dark, dawn and sunrise.
 - **Where to point**:
@@ -35,7 +35,7 @@ Click it for the night panel. The top of the panel answers, in order: which nigh
   - meteor showers, judged where you are: does the radiant clear 10° in darkness, how long is it up with the moon down, and is a nearby night better?
   - curated festivals
 
-**Locations** lists the default location (widget settings or Omarchy weather) and your saved places. Click one to show its sky, or use the bin icon to remove it. **Compare this night** rates every place for the same evening and subject. Below the list, **Add a location** saves a name, latitude, longitude and IANA time zone to `~/.config/omarchy/night-sky-locations.json` (or under `XDG_CONFIG_HOME`). **Copy displayed location** fills the form, and saving an existing name replaces it. All chart times and dates use each location's zone, shown in the header and comparison. The initial location still comes from widget settings or Omarchy weather. Saved locations stay out of the plugin repository.
+**Locations** lists the default location (widget settings or Omarchy weather) and your saved places. Click one to show its sky, or "remove" to delete it. "compare this night" rates every place for the same evening and subject. Below the list, **Add a location** saves a name, latitude, longitude and IANA time zone to `~/.config/omarchy/night-sky-locations.json` (or under `XDG_CONFIG_HOME`). "copy displayed location" fills the form, and saving an existing name replaces it. All chart times and dates use each location's zone, shown in the header and comparison. The initial location still comes from widget settings or Omarchy weather. Saved locations stay out of the plugin repository.
 
 ‹ › step to other nights. The wheel scrolls long panels. Right click the pill or click the panel's refresh button to recalculate; network requests retain the hourly cache limit. Escape closes the panel. Mode/location selections last for the widget session; set their defaults in widget settings to retain them across shell restarts.
 
