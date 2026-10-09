@@ -21,8 +21,10 @@ BarWidget {
   property real nowMs: Date.now()
   property int tab: 0
 
-  readonly property var panel: view ? view.panel : null
-  readonly property var line: panel ? panel.timeline : null
+  // Normalised to null: a "set location" reply or an older cached reply has no panel or shoot.
+  readonly property var panel: view && view.panel ? view.panel : null
+  readonly property var line: panel && panel.timeline ? panel.timeline : null
+  readonly property var shoot: panel && panel.shoot ? panel.shoot : null
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
 
@@ -258,9 +260,9 @@ BarWidget {
 
           Row {
             spacing: Style.space(6)
-            visible: root.panel !== null && root.panel.shoot !== null
+            visible: root.shoot !== null
             Rectangle {
-              readonly property color tone: root.panel && root.panel.shoot ? root.levelColors[root.panel.shoot.level] : root.fg
+              readonly property color tone: root.shoot ? root.levelColors[root.shoot.level] : root.fg
               width: verdictText.implicitWidth + Style.space(16)
               height: verdictText.implicitHeight + Style.space(6)
               radius: height / 2
@@ -270,7 +272,7 @@ BarWidget {
               Text {
                 id: verdictText
                 anchors.centerIn: parent
-                text: root.panel && root.panel.shoot ? root.panel.shoot.headline : ""
+                text: root.shoot ? root.shoot.headline : ""
                 color: root.fg
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -279,7 +281,7 @@ BarWidget {
             }
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              visible: root.panel !== null && root.panel.shoot !== null && root.panel.shoot.aurora
+              visible: root.shoot !== null && root.shoot.aurora === true
               text: "󰭄 aurora possible"
               color: root.kpColor(root.auroraKp)
               font.family: root.fontFamily
@@ -622,10 +624,10 @@ BarWidget {
       Flow {
         width: parent.width
         spacing: Style.space(6)
-        visible: root.panel !== null && root.panel.shoot !== null && root.panel.shoot.factors.length > 0
+        visible: root.shoot !== null && root.shoot.factors.length > 0
 
         Repeater {
-          model: root.panel && root.panel.shoot ? root.panel.shoot.factors : []
+          model: root.shoot ? root.shoot.factors : []
           Rectangle {
             required property var modelData
             readonly property color tone: root.ratingColors[modelData.rating]
