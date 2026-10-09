@@ -1,0 +1,711 @@
+#!/usr/bin/env python3
+"""Night sky for the Omarchy bar: sun, moon, twilight, Milky Way core, clouds and aurora.
+Astronomy is standard-library only, deterministic and offline. Sun: Meeus ch. 25 low-precision
+series. Moon: Meeus ch. 47 (30 largest terms per coordinate) with topocentric parallax.
+Hourly cloud cover (Open-Meteo) and planetary Kp (NOAA SWPC) are fetched at most hourly and
+cached in ~/.cache/night-sky; without a network the panel simply leaves those lanes out."""
+import argparse
+from datetime import date, datetime, time, timedelta, timezone
+import json
+import math
+from pathlib import Path
+import sys
+import urllib.parse
+import urllib.request
+from zoneinfo import ZoneInfo
+
+OMARCHY_WEATHER = Path.home() / '.local/state/omarchy/settings/weather.json'
+
+
+def system_tz():
+    target = Path('/etc/localtime').resolve().as_posix()
+    return target.split('/zoneinfo/', 1)[1] if '/zoneinfo/' in target else 'America/Denver'
+
+
+DEFAULT_TZ = system_tz()
+DELTA_T = 69.2  # TT - UT in seconds, 2026
+AU_KM = 149597870.7
+GC_RA_DEG = (17 + 45 / 60 + 40.04 / 3600) * 15  # Sgr A*, J2000
+GC_DEC_DEG = -(29 + 28.1 / 3600)
+CORE_MIN_ALT = 10.0
+SUN_HORIZON = -0.833
+ASTRO_TWILIGHT = -18.0
+GOLDEN_HOUR = 6.0  # sun altitude where evening golden hour starts
+BLUE_HOUR = -4.0   # golden hour ends and blue hour begins
+CIVIL_TWILIGHT = -6.0  # blue hour ends
+AURORA_KP = 6      # default: Kp a camera can catch low on the poleward horizon near 40-45° latitude
+CLOUDY_PCT = 60    # mean cloud cover in the dark hours that earns a cloud on the pill
+CLOUD_GLYPH = '\U000F0590'
+AURORA_GLYPH = '\U000F0F2F'
+CACHE = Path.home() / '.cache/night-sky'
+CACHE_TTL = timedelta(hours=1)
+AGENT = 'omarchy-night-sky (github.com/buschbrian/omarchy-night-sky)'
+KP_URL = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json'
+REFRACTION_DEG = 34 / 60
+MOON_RADIUS_KM = 1737.4
+
+# Verdict thresholds (minutes)
+GO_MIN_CORE = 30       # core above CORE_MIN_ALT in moon-free dark at least this long -> go
+MIN_MOON_FREE = 30     # less moon-free dark than this -> the moon owns the night
+
+PHASES = ['New Moon', 'Waxing Crescent', 'First Quarter', 'Waxing Gibbous',
+          'Full Moon', 'Waning Gibbous', 'Last Quarter', 'Waning Crescent']
+# Nerd Font Material Design moon glyphs, in PHASES order (render in the bar's theme colour)
+GLYPHS = ['\U000F0F64', '\U000F0F67', '\U000F0F61', '\U000F0F68',
+          '\U000F0F62', '\U000F0F66', '\U000F0F63', '\U000F0F65']
+
+# D, M, M', F, sum_l (1e-6 deg), sum_r (1e-3 km)
+MOON_LR = [
+    (0, 0, 1, 0, 6288774, -20905355), (2, 0, -1, 0, 1274027, -3699111), (2, 0, 0, 0, 658314, -2955968),
+    (0, 0, 2, 0, 213618, -569925), (0, 1, 0, 0, -185116, 48888), (0, 0, 0, 2, -114332, -3149),
+    (2, 0, -2, 0, 58793, 246158), (2, -1, -1, 0, 57066, -152138), (2, 0, 1, 0, 53322, -170733),
+    (2, -1, 0, 0, 45758, -204586), (0, 1, -1, 0, -40923, -129620), (1, 0, 0, 0, -34720, 108743),
+    (0, 1, 1, 0, -30383, 104755), (2, 0, 0, -2, 15327, 10321), (0, 0, 1, 2, -12528, 0),
+    (0, 0, 1, -2, 10980, 79661), (4, 0, -1, 0, 10675, -34782), (0, 0, 3, 0, 10034, -23210),
+    (4, 0, -2, 0, 8548, -21636), (2, 1, -1, 0, -7888, 24208), (2, 1, 0, 0, -6766, 30824),
+    (1, 0, -1, 0, -5163, -8379), (1, 1, 0, 0, 4987, -16675), (2, -1, 1, 0, 4036, -12831),
+    (2, 0, 2, 0, 3994, -10445), (4, 0, 0, 0, 3861, -11650), (2, 0, -3, 0, 3665, 14403),
+    (0, 1, -2, 0, -2689, -7003), (2, 0, -1, 2, -2602, 0), (2, -1, -2, 0, 2390, 10056),
+]
+# D, M, M', F, sum_b (1e-6 deg)
+MOON_B = [
+    (0, 0, 0, 1, 5128122), (0, 0, 1, 1, 280602), (0, 0, 1, -1, 277693), (2, 0, 0, -1, 173237),
+    (2, 0, -1, 1, 55413), (2, 0, -1, -1, 46271), (2, 0, 0, 1, 32573), (0, 0, 2, 1, 17198),
+    (2, 0, 1, -1, 9266), (0, 0, 2, -1, 8822), (2, -1, 0, -1, 8216), (2, 0, -2, -1, 4324),
+    (2, 0, 1, 1, 4200), (2, 1, 0, -1, -3359), (2, -1, -1, 1, 2463), (2, -1, 0, 1, 2211),
+    (2, -1, -1, -1, 2065), (0, 1, -1, -1, -1870), (4, 0, -1, -1, 1828), (0, 1, 0, 1, -1794),
+    (0, 0, 0, 3, -1749), (0, 1, -1, 1, -1565), (1, 0, 0, 1, -1491), (0, 1, 1, 1, -1475),
+    (0, 1, 1, -1, -1410), (0, 1, 0, -1, -1344), (1, 0, 0, -1, -1335), (0, 0, 3, 1, 1107),
+    (4, 0, 0, -1, 1021), (4, 0, -1, 1, 833),
+]
+
+rad = math.radians
+deg = math.degrees
+
+
+def julian_day(t):
+    return t.timestamp() / 86400 + 2440587.5
+
+
+def centuries_tt(jd):
+    return (jd + DELTA_T / 86400 - 2451545.0) / 36525
+
+
+def mean_obliquity(T):
+    return 23.439291 - 0.0130042 * T
+
+
+def gmst_deg(jd):
+    T = (jd - 2451545.0) / 36525
+    return (280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * T * T) % 360
+
+
+def ecl_to_eq(lon, lat, eps):
+    lon, lat, eps = rad(lon), rad(lat), rad(eps)
+    ra = math.atan2(math.sin(lon) * math.cos(eps) - math.tan(lat) * math.sin(eps), math.cos(lon))
+    dec = math.asin(math.sin(lat) * math.cos(eps) + math.cos(lat) * math.sin(eps) * math.sin(lon))
+    return deg(ra) % 360, deg(dec)
+
+
+def sun_position(jd):
+    """Apparent ecliptic longitude (deg), distance (AU), RA/Dec (deg)."""
+    T = centuries_tt(jd)
+    L0 = 280.46646 + 36000.76983 * T + 0.0003032 * T * T
+    M = rad(357.52911 + 35999.05029 * T - 0.0001537 * T * T)
+    e = 0.016708634 - 0.000042037 * T
+    C = ((1.914602 - 0.004817 * T - 0.000014 * T * T) * math.sin(M)
+         + (0.019993 - 0.000101 * T) * math.sin(2 * M) + 0.000289 * math.sin(3 * M))
+    nu = M + rad(C)
+    R = 1.000001018 * (1 - e * e) / (1 + e * math.cos(nu))
+    omega = rad(125.04 - 1934.136 * T)
+    lon = (L0 + C - 0.00569 - 0.00478 * math.sin(omega)) % 360
+    eps = mean_obliquity(T) + 0.00256 * math.cos(omega)
+    ra, dec = ecl_to_eq(lon, 0.0, eps)
+    return lon, R, ra, dec
+
+
+def moon_position(jd):
+    """Ecliptic longitude/latitude (deg), distance (km), RA/Dec (deg), geocentric."""
+    T = centuries_tt(jd)
+    Lp = 218.3164477 + 481267.88123421 * T - 0.0015786 * T * T
+    D = rad(297.8501921 + 445267.1114034 * T - 0.0018819 * T * T)
+    M = rad(357.5291092 + 35999.0502909 * T - 0.0001536 * T * T)
+    Mp = rad(134.9633964 + 477198.8675055 * T + 0.0087414 * T * T)
+    F = rad(93.2720950 + 483202.0175233 * T - 0.0036539 * T * T)
+    A1 = rad(119.75 + 131.849 * T)
+    A2 = rad(53.09 + 479264.290 * T)
+    A3 = rad(313.45 + 481266.484 * T)
+    E = 1 - 0.002516 * T - 0.0000074 * T * T
+    sl = sr = sb = 0.0
+    for d, m, mp, f, cl, cr in MOON_LR:
+        arg = d * D + m * M + mp * Mp + f * F
+        w = E ** abs(m)
+        sl += cl * w * math.sin(arg)
+        sr += cr * w * math.cos(arg)
+    for d, m, mp, f, cb in MOON_B:
+        sb += cb * E ** abs(m) * math.sin(d * D + m * M + mp * Mp + f * F)
+    Lr = rad(Lp)
+    sl += 3958 * math.sin(A1) + 1962 * math.sin(Lr - F) + 318 * math.sin(A2)
+    sb += (-2235 * math.sin(Lr) + 382 * math.sin(A3) + 175 * math.sin(A1 - F) + 175 * math.sin(A1 + F)
+           + 127 * math.sin(Lr - Mp) - 115 * math.sin(Lr + Mp))
+    lon = (Lp + sl / 1e6) % 360
+    lat = sb / 1e6
+    dist = 385000.56 + sr / 1000
+    ra, dec = ecl_to_eq(lon, lat, mean_obliquity(T))
+    return lon, lat, dist, ra, dec
+
+
+def altitude(ra, dec, jd, lat, lon):
+    H = rad(gmst_deg(jd) + lon - ra)
+    s = math.sin(rad(lat)) * math.sin(rad(dec)) + math.cos(rad(lat)) * math.cos(rad(dec)) * math.cos(H)
+    return deg(math.asin(max(-1.0, min(1.0, s))))
+
+
+def azimuth(ra, dec, jd, lat, lon):
+    """Degrees east of north."""
+    H = rad(gmst_deg(jd) + lon - ra)
+    a = math.atan2(math.sin(H), math.cos(H) * math.sin(rad(lat)) - math.tan(rad(dec)) * math.cos(rad(lat)))
+    return (deg(a) + 180) % 360
+
+
+def compass(az):
+    return ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][
+        int((az + 11.25) % 360 // 22.5)]
+
+
+def sun_altitude(t, lat, lon):
+    jd = julian_day(t)
+    _, _, ra, dec = sun_position(jd)
+    return altitude(ra, dec, jd, lat, lon)
+
+
+def moon_topocentric_altitude(jd, lat, lon):
+    _, _, dist, ra, dec = moon_position(jd)
+    u = math.atan(0.99664719 * math.tan(rad(lat)))
+    rho_sin = 0.99664719 * math.sin(u)
+    rho_cos = math.cos(u)
+    sin_pi = 6378.14 / dist
+    H = rad(gmst_deg(jd) + lon - ra)
+    d = rad(dec)
+    dra = math.atan2(-rho_cos * sin_pi * math.sin(H), math.cos(d) - rho_cos * sin_pi * math.cos(H))
+    dec_t = math.atan2((math.sin(d) - rho_sin * sin_pi) * math.cos(dra),
+                       math.cos(d) - rho_cos * sin_pi * math.cos(H))
+    Ht = H - dra
+    s = math.sin(rad(lat)) * math.sin(dec_t) + math.cos(rad(lat)) * math.cos(dec_t) * math.cos(Ht)
+    semi = deg(math.asin(MOON_RADIUS_KM / dist))
+    return deg(math.asin(s)), semi
+
+
+def moon_rise_set_margin(t, lat, lon):
+    """Upper-limb altitude above the refracted horizon; zero at moonrise/moonset."""
+    alt, semi = moon_topocentric_altitude(julian_day(t), lat, lon)
+    return alt + semi + REFRACTION_DEG
+
+
+def core_altitude(t, lat, lon):
+    # J2000 coordinates used as-is (no precession), matching the planner's golden vectors
+    return altitude(GC_RA_DEG, GC_DEC_DEG, julian_day(t), lat, lon)
+
+
+def crossings(fn, start, end, step=timedelta(minutes=10)):
+    """[(time, +1 rising / -1 falling)] where fn changes sign, bisected to about a second."""
+    out = []
+    t0, v0 = start, fn(start)
+    while t0 < end:
+        t1 = min(t0 + step, end)
+        v1 = fn(t1)
+        if (v0 <= 0) != (v1 <= 0):
+            lo, hi, vlo = t0, t1, v0
+            for _ in range(24):
+                mid = lo + (hi - lo) / 2
+                vm = fn(mid)
+                if (vm <= 0) == (vlo <= 0):
+                    lo, vlo = mid, vm
+                else:
+                    hi = mid
+            out.append((hi, 1 if v1 > 0 else -1))
+        t0, v0 = t1, v1
+    return out
+
+
+def phase_info(t):
+    jd = julian_day(t)
+    slon, R, _, _ = sun_position(jd)
+    mlon, mlat, dist, _, _ = moon_position(jd)
+    elong = (mlon - slon) % 360
+    psi = math.acos(math.cos(rad(mlat)) * math.cos(rad(elong)))
+    i = math.atan2(R * AU_KM * math.sin(psi), dist - R * AU_KM * math.cos(psi))
+    frac = (1 + math.cos(i)) / 2
+    idx = int(((elong + 22.5) % 360) // 45)
+    return {'fraction': frac, 'elongation': elong, 'name': PHASES[idx], 'glyph': GLYPHS[idx]}
+
+
+def merge_runs(times, flags, step):
+    spans, begin = [], None
+    for t, up in zip(times, flags):
+        if up and begin is None:
+            begin = t
+        elif not up and begin is not None:
+            spans.append((begin, t))
+            begin = None
+    if begin is not None:
+        spans.append((begin, times[-1] + step))
+    return spans
+
+
+def plan_night(lat, lon, search_start):
+    """Night after search_start (UTC datetime): sun events, moon events, moon-free dark, core hours."""
+    horizon = search_start + timedelta(hours=40)
+    sun_h = lambda t: sun_altitude(t, lat, lon) - SUN_HORIZON
+    sun_a = lambda t: sun_altitude(t, lat, lon) - ASTRO_TWILIGHT
+    moon_h = lambda t: moon_rise_set_margin(t, lat, lon)
+
+    sets = [t for t, d in crossings(sun_h, search_start, horizon) if d < 0]
+    sunset = sets[0] if sets else None
+    rises = [t for t, d in crossings(sun_h, sunset or search_start, horizon) if d > 0]
+    sunrise = rises[0] if rises else None
+
+    dusk = dawn = None
+    a_cross = crossings(sun_a, search_start, horizon)
+    falling = [t for t, d in a_cross if d < 0]
+    if falling:
+        dusk = falling[0]
+        up_after = [t for t, d in a_cross if d > 0 and t > dusk]
+        dawn = up_after[0] if up_after else None
+    darkness = (dusk, dawn) if dusk and dawn else None
+
+    w0 = sunset or search_start
+    w1 = sunrise or horizon
+    events = crossings(moon_h, w0, w1)
+    result = {
+        'sunset': sunset, 'sunrise': sunrise, 'darkness': darkness,
+        'moonrises': [t for t, d in events if d > 0], 'moonsets': [t for t, d in events if d < 0],
+        'moon_free': [], 'core_spans': [], 'phase_at': None,
+    }
+    mid = darkness[0] + (darkness[1] - darkness[0]) / 2 if darkness else w0 + (w1 - w0) / 2
+    result['phase_at'] = mid
+    if not darkness:
+        return result
+
+    d0, d1 = darkness
+    moon_up = moon_h(d0) > 0
+    cursor, free = d0, []
+    for t, d in crossings(moon_h, d0, d1):
+        if d > 0:
+            if not moon_up and t > cursor:
+                free.append((cursor, t))
+            moon_up = True
+        else:
+            moon_up, cursor = False, t
+    if not moon_up and d1 > cursor:
+        free.append((cursor, d1))
+    result['moon_free'] = [(a, b) for a, b in free if (b - a) > timedelta(minutes=1)]
+
+    step = timedelta(minutes=1)
+    for a, b in result['moon_free']:
+        times, t = [], a
+        while t < b:
+            times.append(t)
+            t += step
+        flags = [core_altitude(x, lat, lon) > CORE_MIN_ALT for x in times]
+        for s, e in merge_runs(times, flags, step):
+            result['core_spans'].append((s, min(e, b)))
+    return result
+
+
+def minutes(span):
+    return (span[1] - span[0]).total_seconds() / 60
+
+
+def hm(mins):
+    mins = int(round(mins))
+    return f'{mins // 60}h{mins % 60:02d}m'
+
+
+def verdict(plan, illum):
+    """Rule order: no dark -> no moon-free dark -> core up long enough -> dark without core."""
+    if not plan['darkness']:
+        return 'none', 'No astronomical darkness tonight'
+    free = max((minutes(w) for w in plan['moon_free']), default=0)
+    pct = round(illum * 100)
+    if free < MIN_MOON_FREE:
+        return 'skip', f'Moon {pct}% - skip core shots'
+    core = plan['core_spans']
+    if sum(minutes(s) for s in core) >= GO_MIN_CORE:
+        best = max(core, key=minutes)
+        return 'go', f'Go: {hm(free)} moon-free dark, core up {fmt_time(best[0], plan)}-{fmt_time(best[1], plan)}'
+    up = sum(minutes(s) for s in core)
+    note = f'core up only {round(up)}m' if up else f'core below {CORE_MIN_ALT:.0f}deg'
+    return 'dark', f'{hm(free)} moon-free dark, {note} - no core shots'
+
+
+def fmt_time(t, plan):
+    return t.astimezone(plan['tz']).strftime('%H:%M')
+
+
+def iso(t, tz):
+    return t.astimezone(tz).isoformat(timespec='seconds') if t else None
+
+
+def tonight(lat, lon, day, tz_name=DEFAULT_TZ):
+    tz = ZoneInfo(tz_name)
+    start = datetime.combine(day, time(12, 0), tzinfo=tz).astimezone(timezone.utc)
+    plan = plan_night(lat, lon, start)
+    plan['tz'] = tz
+    phase = phase_info(plan['phase_at'])
+    key, line = verdict(plan, phase['fraction'])
+    free = max((minutes(w) for w in plan['moon_free']), default=0)
+    core = plan['core_spans']
+    dark = plan['darkness']
+    return {
+        'date': day.isoformat(),
+        'location': {'lat': lat, 'lon': lon, 'tz': tz_name},
+        'moon': {
+            'phase': phase['name'], 'glyph': phase['glyph'],
+            'illumination_pct': round(phase['fraction'] * 100),
+            'fraction': round(phase['fraction'], 3), 'waxing': phase['elongation'] < 180,
+            'moonrise': iso(plan['moonrises'][0] if plan['moonrises'] else None, tz),
+            'moonset': iso(plan['moonsets'][0] if plan['moonsets'] else None, tz),
+        },
+        'sunset': iso(plan['sunset'], tz),
+        'astro_twilight_end': iso(dark[0] if dark else None, tz),
+        'astro_dawn_start': iso(dark[1] if dark else None, tz),
+        'sunrise': iso(plan['sunrise'], tz),
+        'moon_free_dark': [{'start': iso(a, tz), 'end': iso(b, tz), 'minutes': round(minutes((a, b)))}
+                           for a, b in plan['moon_free']],
+        'moon_free_minutes': round(free),
+        'milky_way_core': {
+            'min_altitude_deg': CORE_MIN_ALT,
+            'minutes': round(sum(minutes(s) for s in core)),
+            'windows': [{'start': iso(a, tz), 'end': iso(b, tz), 'minutes': round(minutes((a, b)))}
+                        for a, b in core],
+        },
+        'verdict': line,
+        'verdict_class': key,
+        '_plan': plan,
+    }
+
+
+def sky_band(alt):
+    if alt > GOLDEN_HOUR:
+        return 'day'
+    if alt > BLUE_HOUR:
+        return 'golden'
+    if alt > CIVIL_TWILIGHT:
+        return 'blue'
+    return 'twilight' if alt > ASTRO_TWILIGHT else 'dark'
+
+
+def timeline(plan, lat, lon, clouds=None, kp=None):
+    """Evening golden hour to the end of morning golden hour: sky bands from exact sun-altitude
+    crossings, sun/moon/core altitude curves, and cloud and Kp bins, all as 0-1 fractions."""
+    tz = plan['tz']
+    sunset, sunrise, dark = plan['sunset'], plan['sunrise'], plan['darkness']
+    if not sunset:
+        return None
+    sun_g = lambda t: sun_altitude(t, lat, lon) - GOLDEN_HOUR
+    falling = [t for t, d in crossings(sun_g, sunset - timedelta(hours=3), sunset) if d < 0]
+    w0 = falling[-1] if falling else sunset - timedelta(minutes=45)
+    end = sunrise or (dark[1] if dark else sunset + timedelta(hours=14))
+    rising = [t for t, d in crossings(sun_g, end, end + timedelta(hours=3)) if d > 0]
+    w1 = rising[0] if rising else end + timedelta(minutes=45)
+    total = (w1 - w0).total_seconds()
+    frac = lambda t: round(min(max((t - w0).total_seconds() / total, 0), 1), 4)
+    clock = lambda t: fmt_time(t, plan)
+
+    marks = {}
+    for thr in (BLUE_HOUR, CIVIL_TWILIGHT, ASTRO_TWILIGHT, SUN_HORIZON):
+        for t, d in crossings(lambda t: sun_altitude(t, lat, lon) - thr, w0, w1):
+            marks[(thr, 'down' if d < 0 else 'up')] = t
+    edges = sorted({w0, w1, *(t for (thr, _), t in marks.items() if thr != SUN_HORIZON)})
+    sky = []
+    for a, b in zip(edges, edges[1:]):
+        kind = sky_band(sun_altitude(a + (b - a) / 2, lat, lon))
+        if sky and sky[-1]['kind'] == kind:
+            sky[-1].update(end=clock(b), b=frac(b))
+        else:
+            sky.append({'kind': kind, 'start': clock(a), 'end': clock(b), 'a': frac(a), 'b': frac(b)})
+
+    def span(kind, a, b):
+        a, b = max(a, w0), min(b, w1)
+        return {'kind': kind, 'start': clock(a), 'end': clock(b), 'a': frac(a), 'b': frac(b)}
+
+    moon_h = lambda t: moon_rise_set_margin(t, lat, lon)
+    moon, up, cursor = [], moon_h(w0) > 0, w0
+    for t, d in crossings(moon_h, w0, w1):
+        if d < 0 and up:
+            moon.append(span('moon', cursor, t))
+        up, cursor = d > 0, t
+    if up:
+        moon.append(span('moon', cursor, w1))
+
+    curves = {'sun': [], 'moon': [], 'core': []}
+    t = w0
+    while t <= w1 + timedelta(minutes=1):
+        jd = julian_day(t)
+        curves['sun'].append([frac(t), round(sun_altitude(t, lat, lon), 1)])
+        curves['moon'].append([frac(t), round(moon_topocentric_altitude(jd, lat, lon)[0], 1)])
+        curves['core'].append([frac(t), round(core_altitude(t, lat, lon), 1)])
+        t += timedelta(minutes=10)
+
+    def at(key):
+        t = marks.get(key)
+        return clock(t) if t else '--'
+
+    events = {
+        'evening': {'golden': clock(w0), 'sunset': clock(sunset), 'blue': at((BLUE_HOUR, 'down')),
+                    'blue_end': at((CIVIL_TWILIGHT, 'down')), 'dark': at((ASTRO_TWILIGHT, 'down'))},
+        'morning': {'dawn': at((ASTRO_TWILIGHT, 'up')), 'blue': at((CIVIL_TWILIGHT, 'up')),
+                    'golden': at((BLUE_HOUR, 'up')), 'sunrise': clock(sunrise) if sunrise else '--',
+                    'golden_end': clock(w1)},
+    }
+
+    pool = [x for a, b in plan['core_spans'] for x in minute_range(a, b, 5)]
+    if not pool and dark:
+        pool = minute_range(*dark, 5)
+    best = max(pool, key=lambda x: core_altitude(x, lat, lon), default=None)
+    core_best = None
+    if best and core_altitude(best, lat, lon) > 0:
+        az = azimuth(GC_RA_DEG, GC_DEC_DEG, julian_day(best), lat, lon)
+        core_best = {'time': clock(best), 'alt': round(core_altitude(best, lat, lon)), 'az': round(az),
+                     'dir': compass(az), 'moon_free': bool(plan['core_spans'])}
+    moon_dir = None
+    rise = next((t for t, d in crossings(moon_h, w0, w1) if d > 0), None)
+    if rise:
+        _, _, _, ra, dec = moon_position(julian_day(rise))
+        az = azimuth(ra, dec, julian_day(rise), lat, lon)
+        moon_dir = {'time': clock(rise), 'az': round(az), 'dir': compass(az), 'event': 'rise'}
+
+    cloud_bins = []
+    for hour in clouds or []:
+        a = datetime.fromisoformat(hour['time']).replace(tzinfo=timezone.utc)
+        if a + timedelta(hours=1) > w0 and a < w1:
+            cloud_bins.append({**span('cloud', a, a + timedelta(hours=1)),
+                               **{k: hour[k] for k in ('total', 'low', 'mid', 'high')}})
+    window = dark or (sunset, end)
+    in_dark = [c['total'] for c in clouds or []
+               if window[0] - timedelta(hours=1) < datetime.fromisoformat(c['time']).replace(tzinfo=timezone.utc) < window[1]]
+
+    kp_bins = []
+    for row in kp or []:
+        a = datetime.fromisoformat(row['time']).replace(tzinfo=timezone.utc)
+        if a + timedelta(hours=3) > w0 and a < w1:
+            kp_bins.append({**span('kp', a, a + timedelta(hours=3)), 'kp': row['kp'],
+                            'scale': row.get('scale'), 'observed': row.get('observed')})
+
+    ticks, t = [], w0.astimezone(tz).replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    while t < w1:
+        if t.hour % 2 == 0:
+            ticks.append({'label': t.strftime('%H'), 'at': frac(t)})
+        t += timedelta(hours=1)
+    return {'start_ms': int(w0.timestamp() * 1000), 'end_ms': int(w1.timestamp() * 1000),
+            'sky': sky, 'moon': moon, 'core': [span('core', a, b) for a, b in plan['core_spans']],
+            'curves': curves, 'events': events, 'core_best': core_best, 'moon_dir': moon_dir,
+            'clouds': cloud_bins if clouds else None,
+            'cloud_pct': round(sum(in_dark) / len(in_dark)) if in_dark else None,
+            'kp': kp_bins if kp else None,
+            'kp_max': max((k['kp'] for k in kp_bins), default=None) if kp else None,
+            'ticks': ticks}
+
+
+def minute_range(a, b, step):
+    out, t = [], a
+    while t <= b:
+        out.append(t)
+        t += timedelta(minutes=step)
+    return out
+
+
+def load_clouds(lat, lon, now=None):
+    """Hourly cloud cover (Open-Meteo, yesterday + 16 days), cached for an hour; None when unreachable."""
+    now = now or datetime.now(timezone.utc)
+    path = CACHE / f'clouds-{lat:.2f}-{lon:.2f}.json'
+    try:
+        cached = json.loads(path.read_text())
+        if now - datetime.fromisoformat(cached['fetched']) < CACHE_TTL:
+            return cached['hours']
+    except (OSError, ValueError, KeyError):
+        cached = None
+    url = ('https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode({
+        'latitude': f'{lat:.4f}', 'longitude': f'{lon:.4f}', 'timezone': 'UTC', 'past_days': 1,
+        'forecast_days': 16, 'hourly': 'cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high'}))
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': AGENT}),
+                                    timeout=8) as response:
+            h = json.load(response)['hourly']
+    except (OSError, ValueError, KeyError):
+        return cached['hours'] if cached else None
+    hours = [{'time': t, 'total': c, 'low': lo, 'mid': mi, 'high': hi}
+             for t, c, lo, mi, hi in zip(h['time'], h['cloud_cover'], h['cloud_cover_low'],
+                                         h['cloud_cover_mid'], h['cloud_cover_high']) if c is not None]
+    CACHE.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'fetched': now.isoformat(), 'hours': hours}))
+    return hours
+
+
+def load_kp(now=None):
+    """Planetary Kp in 3-hour bins, a day back through NOAA SWPC's 3-day forecast; cached an hour."""
+    now = now or datetime.now(timezone.utc)
+    path = CACHE / 'kp.json'
+    try:
+        cached = json.loads(path.read_text())
+        if now - datetime.fromisoformat(cached['fetched']) < CACHE_TTL:
+            return cached['rows']
+    except (OSError, ValueError, KeyError):
+        cached = None
+    try:
+        with urllib.request.urlopen(urllib.request.Request(KP_URL, headers={'User-Agent': AGENT}),
+                                    timeout=8) as response:
+            rows = kp_rows(json.load(response), now)
+    except (OSError, ValueError, KeyError, TypeError):
+        return cached['rows'] if cached else None
+    CACHE.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'fetched': now.isoformat(), 'rows': rows}))
+    return rows
+
+
+def kp_rows(products, now):
+    out = []
+    for row in products:
+        t = datetime.fromisoformat(row['time_tag']).replace(tzinfo=timezone.utc)
+        if t >= now - timedelta(hours=24):
+            out.append({'time': row['time_tag'], 'kp': round(float(row['kp']), 2),
+                        'observed': row.get('observed') or '', 'scale': row.get('noaa_scale')})
+    return out
+
+
+def bar_output(report, sun=None, lat=None, lon=None, clouds=None, kp=None, aurora_kp=AURORA_KP):
+    plan = report.pop('_plan')
+    moon = report['moon']
+    free = report['moon_free_minutes']
+    if report['verdict_class'] == 'none':
+        night = f"{moon['glyph']} no dark"
+    elif free >= MIN_MOON_FREE:
+        night = f"{moon['glyph']} {free // 60}h{free % 60:02d}"
+    else:
+        night = f"{moon['glyph']} {moon['illumination_pct']}%"
+    line = timeline(plan, lat, lon, clouds, kp) if lat is not None else None
+    notes = []
+    if line and line['cloud_pct'] is not None and line['cloud_pct'] >= CLOUDY_PCT:
+        night += f' {CLOUD_GLYPH}'
+        notes.append(f"Clouds {line['cloud_pct']}% through the dark hours")
+    if line and line['kp_max'] is not None and line['kp_max'] >= aurora_kp:
+        night += f' {AURORA_GLYPH}'
+        notes.append(f"Aurora chance: Kp {line['kp_max']:.1f} forecast tonight (camera, {'north' if lat >= 0 else 'south'} horizon)")
+    text = f"{sun['text']}  {night}" if sun else night
+
+    def clock(value):
+        return datetime.fromisoformat(value).strftime('%H:%M') if value else '--'
+
+    lines = ([sun['tooltip'], ''] if sun else []) + [
+        report['verdict'],
+        f"{moon['phase']}, {moon['illumination_pct']}% lit   rise {clock(moon['moonrise'])}   set {clock(moon['moonset'])}",
+        *notes, '', 'Click for the night timeline']
+    out = {'text': text, 'tooltip': '\n'.join(lines), 'class': report['verdict_class']}
+    if lat is not None:
+        out['panel'] = {
+            'date': report['date'], 'verdict': report['verdict'], 'notes': notes,
+            'moon': {**moon, 'moonrise': clock(moon['moonrise']), 'moonset': clock(moon['moonset'])},
+            'moon_free_minutes': free, 'core_minutes': report['milky_way_core']['minutes'],
+            'south': lat < 0, 'aurora_kp': aurora_kp,
+            'timeline': line,
+        }
+    return out
+
+
+def sun_report(lat, lon, now, tz_name=DEFAULT_TZ):
+    """Today's sunrise/sunset, evening golden hour and the next sun event after `now`."""
+    tz = ZoneInfo(tz_name)
+    now = now.astimezone(tz)
+    start = datetime.combine(now.date(), time(0), tzinfo=tz)
+    end = start + timedelta(days=2)
+    horizon = crossings(lambda t: sun_altitude(t, lat, lon) - SUN_HORIZON, start, end)
+    golden = crossings(lambda t: sun_altitude(t, lat, lon) - GOLDEN_HOUR, start, end)
+    rises = [t.astimezone(tz) for t, d in horizon if d > 0]
+    sets = [t.astimezone(tz) for t, d in horizon if d < 0]
+    today = now.date()
+    rise = next((t for t in rises if t.date() == today), None)
+    sunset = next((t for t in sets if t.date() == today), None)
+    golden_start = next((t.astimezone(tz) for t, d in golden
+                         if d < 0 and t.astimezone(tz).date() == today), None)
+    upcoming = sorted([(t, 'sunrise') for t in rises if t > now] + [(t, 'sunset') for t in sets if t > now])
+    hhmm = lambda t: t.strftime('%H:%M') if t else '--'
+    nxt_t, nxt = upcoming[0] if upcoming else (None, None)
+    glyph = '\U000F059C' if nxt == 'sunrise' else '\U000F059B'
+    lines = [f'Sunrise {hhmm(rise)}   Sunset {hhmm(sunset)}']
+    if rise and sunset:
+        lines[0] += f'   ({hm(minutes((rise, sunset)))} of daylight)'
+    if golden_start and sunset:
+        lines.append(f'Golden hour {hhmm(golden_start)}-{hhmm(sunset)}')
+    if nxt == 'sunrise' and nxt_t.date() != today:
+        lines.append(f'Tomorrow\'s sunrise {hhmm(nxt_t)}')
+    return {'sunrise': hhmm(rise), 'sunset': hhmm(sunset), 'golden_hour': hhmm(golden_start),
+            'next': nxt, 'next_at': hhmm(nxt_t),
+            'text': f'{glyph} {hhmm(nxt_t)}', 'tooltip': '\n'.join(lines)}
+
+
+def current_night(lat, lon, now, tz_name=DEFAULT_TZ):
+    """Before sunrise the night still in progress is last evening's; after it, tonight's."""
+    last = tonight(lat, lon, now.date() - timedelta(days=1), tz_name)
+    sunrise = last['_plan']['sunrise']
+    return last if sunrise and now < sunrise else tonight(lat, lon, now.date(), tz_name)
+
+
+def read_location():
+    """The location set in Omarchy's weather panel, if it stored coordinates."""
+    try:
+        state = json.loads(OMARCHY_WEATHER.read_text())
+        lat, lon = float(state['latitude']), float(state['longitude'])
+        if -90 <= lat <= 90 and -180 <= lon <= 180:
+            return lat, lon
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Tonight's sky: moon, dark window and Milky Way core")
+    ap.add_argument('--date', type=date.fromisoformat, help='evening date, YYYY-MM-DD (default today)')
+    ap.add_argument('--lat', type=float)
+    ap.add_argument('--lon', type=float)
+    ap.add_argument('--tz', default=DEFAULT_TZ)
+    ap.add_argument('--bar', action='store_true', help='short JSON for the bar widget')
+    ap.add_argument('--sun', action='store_true', help='next sunrise/sunset and golden hour as JSON')
+    ap.add_argument('--offline', action='store_true', help='with --bar: skip the cloud and Kp fetches')
+    ap.add_argument('--aurora-kp', type=float, default=AURORA_KP, help='Kp that flags an aurora chance (default 6)')
+    args = ap.parse_args(argv)
+    if (args.lat is None) != (args.lon is None):
+        ap.error('--lat and --lon go together')
+    here = (args.lat, args.lon) if args.lat is not None else read_location()
+    if here is None:
+        json.dump({'text': '\U000F0594 set location', 'class': 'none',
+                   'tooltip': 'Night sky needs a location: set latitude and longitude in the widget '
+                              "settings, or a location in Omarchy's weather panel."}, sys.stdout)
+        print()
+        return
+    lat, lon = here
+    if args.sun:
+        now = datetime.now(ZoneInfo(args.tz))
+        if args.date:
+            now = datetime.combine(args.date, time(12, 0), tzinfo=ZoneInfo(args.tz))
+        json.dump(sun_report(lat, lon, now, args.tz), sys.stdout, ensure_ascii=False)
+        print()
+        return
+    now = datetime.now(ZoneInfo(args.tz))
+    if args.date:
+        report = tonight(lat, lon, args.date, args.tz)
+        now = datetime.combine(args.date, time(12, 0), tzinfo=ZoneInfo(args.tz))
+    else:
+        report = current_night(lat, lon, now, args.tz)
+    if args.bar:
+        clouds = None if args.offline else load_clouds(lat, lon)
+        kp = None if args.offline else load_kp()
+        out = bar_output(report, sun_report(lat, lon, now, args.tz), lat, lon, clouds, kp, args.aurora_kp)
+    else:
+        out = {k: v for k, v in report.items() if k != '_plan'}
+    json.dump(out, sys.stdout, indent=None if args.bar else 2, ensure_ascii=False)
+    print()
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,230 @@
+{
+  "generated_by": "app/tests/golden-vectors.test.ts (astronomy-engine, TypeScript)",
+  "tolerance": {
+    "time_s": 60,
+    "altitude_deg": 0.1,
+    "illum_fraction": 0.002,
+    "minutes": 2
+  },
+  "cases": [
+    {
+      "id": "slc-2026-09-15",
+      "note": "Near equinox, 40°N",
+      "latitude": 40.76,
+      "longitude": -111.89,
+      "evening_utc": "2026-09-16T03:00:00Z",
+      "expected": {
+        "darkness": {
+          "start": "2026-09-16T03:09:08.162Z",
+          "end": "2026-09-16T11:36:22.785Z"
+        },
+        "no_astronomical_darkness": false,
+        "moon_illum_fraction": 0.266,
+        "moonset": "2026-09-16T03:36:01.332Z",
+        "moonrise": null,
+        "moon_free_windows": [
+          {
+            "start": "2026-09-16T03:36:01.331Z",
+            "end": "2026-09-16T11:36:22.785Z",
+            "minutes": 480
+          }
+        ],
+        "moon_free_minutes": 480,
+        "gc": {
+          "max_altitude_deg": 14.6,
+          "max_altitude_at": "2026-09-16T03:36:01.331Z",
+          "rises_during_darkness": true
+        }
+      }
+    },
+    {
+      "id": "glacier-2026-06-20",
+      "note": "Summer solstice at 49°N: no astronomical darkness",
+      "latitude": 48.99,
+      "longitude": -114,
+      "evening_utc": "2026-06-21T04:00:00Z",
+      "expected": {
+        "darkness": null,
+        "no_astronomical_darkness": true,
+        "moon_illum_fraction": 0.423,
+        "moonset": null,
+        "moonrise": null,
+        "moon_free_windows": [],
+        "moon_free_minutes": 0,
+        "gc": {
+          "max_altitude_deg": null,
+          "max_altitude_at": null,
+          "rises_during_darkness": false
+        }
+      }
+    },
+    {
+      "id": "slc-2026-12-21",
+      "note": "Winter solstice, near full moon: zero moon-free minutes",
+      "latitude": 40.76,
+      "longitude": -111.89,
+      "evening_utc": "2026-12-22T02:00:00Z",
+      "expected": {
+        "darkness": {
+          "start": "2026-12-22T01:42:10.587Z",
+          "end": "2026-12-22T13:09:52.187Z"
+        },
+        "no_astronomical_darkness": false,
+        "moon_illum_fraction": 0.952,
+        "moonset": null,
+        "moonrise": null,
+        "moon_free_windows": [],
+        "moon_free_minutes": 0,
+        "gc": {
+          "max_altitude_deg": null,
+          "max_altitude_at": null,
+          "rises_during_darkness": false
+        }
+      }
+    },
+    {
+      "id": "canyonlands-2026-06-15",
+      "note": "Near new moon, GC season",
+      "latitude": 38.374031,
+      "longitude": -109.965416,
+      "evening_utc": "2026-06-16T03:00:00Z",
+      "expected": {
+        "darkness": {
+          "start": "2026-06-16T04:42:18.530Z",
+          "end": "2026-06-16T09:58:42.994Z"
+        },
+        "no_astronomical_darkness": false,
+        "moon_illum_fraction": 0.023,
+        "moonset": null,
+        "moonrise": null,
+        "moon_free_windows": [
+          {
+            "start": "2026-06-16T04:42:18.530Z",
+            "end": "2026-06-16T09:58:42.994Z",
+            "minutes": 316
+          }
+        ],
+        "moon_free_minutes": 316,
+        "gc": {
+          "max_altitude_deg": 22.6,
+          "max_altitude_at": "2026-06-16T07:27:18.530Z",
+          "rises_during_darkness": true
+        }
+      }
+    },
+    {
+      "id": "canyonlands-2026-06-29",
+      "note": "Near full moon",
+      "latitude": 38.374031,
+      "longitude": -109.965416,
+      "evening_utc": "2026-06-30T03:00:00Z",
+      "expected": {
+        "darkness": {
+          "start": "2026-06-30T04:44:02.964Z",
+          "end": "2026-06-30T10:03:05.355Z"
+        },
+        "no_astronomical_darkness": false,
+        "moon_illum_fraction": 0.998,
+        "moonset": null,
+        "moonrise": null,
+        "moon_free_windows": [],
+        "moon_free_minutes": 0,
+        "gc": {
+          "max_altitude_deg": null,
+          "max_altitude_at": null,
+          "rises_during_darkness": false
+        }
+      }
+    },
+    {
+      "id": "great-basin-2026-08-07",
+      "note": "Partial moon: moon-free window shorter than the night",
+      "latitude": 38.98,
+      "longitude": -114.3,
+      "evening_utc": "2026-08-08T03:00:00Z",
+      "expected": {
+        "darkness": {
+          "start": "2026-08-08T04:24:27.001Z",
+          "end": "2026-08-08T11:01:44.108Z"
+        },
+        "no_astronomical_darkness": false,
+        "moon_illum_fraction": 0.255,
+        "moonset": null,
+        "moonrise": "2026-08-08T07:44:23.877Z",
+        "moon_free_windows": [
+          {
+            "start": "2026-08-08T04:24:27.001Z",
+            "end": "2026-08-08T07:44:23.876Z",
+            "minutes": 200
+          }
+        ],
+        "moon_free_minutes": 200,
+        "gc": {
+          "max_altitude_deg": 22,
+          "max_altitude_at": "2026-08-08T04:24:27.001Z",
+          "rises_during_darkness": true
+        }
+      }
+    },
+    {
+      "id": "bryce-2026-04-18",
+      "note": "Spring: GC only before dawn",
+      "latitude": 37.593,
+      "longitude": -112.187,
+      "evening_utc": "2026-04-19T03:00:00Z",
+      "expected": {
+        "darkness": {
+          "start": "2026-04-19T03:41:11.687Z",
+          "end": "2026-04-19T11:14:07.491Z"
+        },
+        "no_astronomical_darkness": false,
+        "moon_illum_fraction": 0.05,
+        "moonset": "2026-04-19T04:10:10.495Z",
+        "moonrise": null,
+        "moon_free_windows": [
+          {
+            "start": "2026-04-19T04:10:10.495Z",
+            "end": "2026-04-19T11:14:07.491Z",
+            "minutes": 424
+          }
+        ],
+        "moon_free_minutes": 424,
+        "gc": {
+          "max_altitude_deg": 23.4,
+          "max_altitude_at": "2026-04-19T11:14:07.491Z",
+          "rises_during_darkness": true
+        }
+      }
+    },
+    {
+      "id": "craters-2026-09-10",
+      "note": "Idaho, new moon: whole night moon-free",
+      "latitude": 43.417,
+      "longitude": -113.563,
+      "evening_utc": "2026-09-11T03:00:00Z",
+      "expected": {
+        "darkness": {
+          "start": "2026-09-11T03:31:39.171Z",
+          "end": "2026-09-11T11:30:49.528Z"
+        },
+        "no_astronomical_darkness": false,
+        "moon_illum_fraction": 0.001,
+        "moonset": null,
+        "moonrise": null,
+        "moon_free_windows": [
+          {
+            "start": "2026-09-11T03:31:39.171Z",
+            "end": "2026-09-11T11:30:49.528Z",
+            "minutes": 479
+          }
+        ],
+        "moon_free_minutes": 479,
+        "gc": {
+          "max_altitude_deg": 14.5,
+          "max_altitude_at": "2026-09-11T03:31:39.171Z",
+          "rises_during_darkness": true
+        }
+      }
+    }
+  ]
+}
