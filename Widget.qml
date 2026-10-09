@@ -297,7 +297,7 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen && root.panel !== null
-    contentWidth: popup.fittedContentWidth(Style.space(440))
+    contentWidth: popup.fittedContentWidth(Style.space(540))
     contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(760))
 
     FocusScope {
@@ -533,182 +533,18 @@ BarWidget {
         }
       }
 
-      // ---- Sky chart: sky colour by sun altitude, altitude curves, now marker
-      Item {
-        id: chartBox
+      SkyTimeline {
+        id: skyTimeline
         width: parent.width
-        height: Style.space(150)
         visible: root.line !== null
-
-        readonly property real altTop: 70
-        readonly property real altBottom: -20
-
-        Canvas {
-          id: sky
-          x: root.gutter
-          width: parent.width - root.gutter * 2
-          height: parent.height
-          property var data: root.line
-          property real now: root.nowMs
-          property bool showNow: root.dayOffset === 0
-          onDataChanged: requestPaint()
-          onNowChanged: requestPaint()
-          onShowNowChanged: requestPaint()
-          onWidthChanged: requestPaint()
-
-          function yOf(alt) {
-            return (chartBox.altTop - Math.max(chartBox.altBottom, Math.min(chartBox.altTop, alt))) / (chartBox.altTop - chartBox.altBottom) * height
-          }
-
-          function curve(ctx, points, color, widthPx, alpha, minAlt) {
-            ctx.strokeStyle = root.rgba(color, alpha)
-            ctx.lineWidth = widthPx
-            ctx.lineJoin = "round"
-            ctx.lineCap = "round"
-            ctx.beginPath()
-            var drawing = false
-            for (var i = 0; i < points.length; i++) {
-              var p = points[i]
-              if (p[1] < minAlt) { drawing = false; continue }
-              var x = p[0] * width, y = yOf(p[1])
-              if (drawing) ctx.lineTo(x, y); else ctx.moveTo(x, y)
-              drawing = true
-            }
-            ctx.stroke()
-          }
-
-          onPaint: {
-            var ctx = getContext("2d")
-            ctx.reset()
-            if (!data) return
-            var w = width, h = height, r = Style.space(8)
-
-            ctx.save()
-            ctx.beginPath()
-            ctx.roundedRect(0, 0, w, h, r, r)
-            ctx.clip()
-
-            // Sky: a horizontal gradient through each band's centre, so the eleven
-            // minutes of blue hour bleed into golden hour and twilight like the real sky.
-            var g = ctx.createLinearGradient(0, 0, w, 0)
-            var bands = data.sky
-            g.addColorStop(0, root.bandColors[bands[0].kind])
-            for (var i = 0; i < bands.length; i++)
-              g.addColorStop((bands[i].a + bands[i].b) / 2, root.bandColors[bands[i].kind])
-            g.addColorStop(1, root.bandColors[bands[bands.length - 1].kind])
-            ctx.fillStyle = g
-            ctx.fillRect(0, 0, w, h)
-
-            // Fade towards the ground below the horizon.
-            var y0 = yOf(0)
-            var ground = ctx.createLinearGradient(0, y0, 0, h)
-            ground.addColorStop(0, "rgba(0,0,0,0.15)")
-            ground.addColorStop(1, "rgba(0,0,0,0.55)")
-            ctx.fillStyle = ground
-            ctx.fillRect(0, y0, w, h - y0)
-
-            // A deterministic star field inside the dark band.
-            var dark = bands.filter(function(b) { return b.kind === "dark" })
-            ctx.fillStyle = "rgba(255,255,255,0.55)"
-            for (var d = 0; d < dark.length; d++) {
-              var seed = 7
-              for (var s = 0; s < 70; s++) {
-                seed = (seed * 16807) % 2147483647
-                var sx = (dark[d].a + (dark[d].b - dark[d].a) * (seed % 1000) / 1000) * w
-                seed = (seed * 16807) % 2147483647
-                var sy = (seed % 1000) / 1000 * (y0 - 6)
-                var sr = (s % 7 === 0) ? 1.1 : 0.6
-                ctx.beginPath(); ctx.arc(sx, sy, sr, 0, 2 * Math.PI); ctx.fill()
-              }
-            }
-
-            // Horizon and the core's 10° line.
-            ctx.strokeStyle = "rgba(255,255,255,0.45)"
-            ctx.lineWidth = 1
-            ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(w, y0); ctx.stroke()
-            var y10 = yOf(10)
-            ctx.strokeStyle = "rgba(255,255,255,0.18)"
-            ctx.setLineDash([3, 4])
-            ctx.beginPath(); ctx.moveTo(0, y10); ctx.lineTo(w, y10); ctx.stroke()
-            ctx.setLineDash([])
-
-            // Curves: sun, moon (brighter and thicker the fuller it is), core (bold
-            // where it is above 10° in moon-free dark).
-            var frac = root.panel.moon.fraction
-            curve(ctx, data.curves.sun, root.sunColor, 2, 0.95, -25)
-            curve(ctx, data.curves.moon, root.moonColor, 1.5 + 2 * frac, 0.45 + 0.55 * frac, -25)
-            curve(ctx, data.curves.core, Color.accent, 1.5, 0.55, -25)
-            for (var c = 0; c < data.core.length; c++) {
-              var span = data.core[c]
-              var pts = data.curves.core.filter(function(p) { return p[0] >= span.a - 0.005 && p[0] <= span.b + 0.005 })
-              curve(ctx, pts, Color.accent, 4, 1, -25)
-            }
-
-            var best = root.panel.best_window
-            if (best) {
-              var left = Math.max(0, (best.start_ms - data.start_ms) / (data.end_ms - data.start_ms)) * w
-              var right = Math.min(1, (best.end_ms - data.start_ms) / (data.end_ms - data.start_ms)) * w
-              ctx.fillStyle = root.rgba(root.levelColors[best.level], 0.18)
-              ctx.fillRect(left, 0, right - left, h)
-              ctx.strokeStyle = root.levelColors[best.level]
-              ctx.lineWidth = 2
-              ctx.strokeRect(left, 1, right - left, h - 2)
-            }
-
-            // Now.
-            var at = (now - data.start_ms) / (data.end_ms - data.start_ms)
-            if (showNow && at >= 0 && at <= 1) {
-              ctx.strokeStyle = Color.urgent
-              ctx.lineWidth = 2
-              ctx.beginPath(); ctx.moveTo(at * w, 0); ctx.lineTo(at * w, h); ctx.stroke()
-            }
-            ctx.restore()
-          }
-        }
-
-        // Band names along the top edge, where a band is wide enough to hold one.
-        Repeater {
-          model: root.line ? root.line.sky : []
-          Text {
-            required property var modelData
-            readonly property real span: (modelData.b - modelData.a) * sky.width
-            visible: span > implicitWidth + Style.space(6)
-            x: sky.x + (modelData.a + modelData.b) / 2 * sky.width - implicitWidth / 2
-            y: Style.space(4)
-            text: modelData.kind === "dark" ? "night" : modelData.kind
-            color: "white"
-            opacity: 0.7
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
-
-        Column {
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.space(6)
-          Repeater {
-            model: [["Sun", root.sunColor], ["Moon", root.moonColor], ["Core", Color.accent]]
-            Row {
-              required property var modelData
-              spacing: Style.space(4)
-              Rectangle { width: Style.space(10); height: 3; radius: 1.5; color: modelData[1]; anchors.verticalCenter: parent.verticalCenter }
-              Text { text: modelData[0]; color: Qt.darker(root.fg, 1.3); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-            }
-          }
-        }
-
-        Repeater {
-          model: [60, 30, 10, 0]
-          Text {
-            required property var modelData
-            x: sky.x + sky.width + Style.space(6)
-            y: sky.yOf(modelData) - implicitHeight / 2
-            text: modelData + "°"
-            color: Qt.darker(root.fg, 1.5)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
+        timeline: root.line
+        bestWindow: root.panel ? root.panel.best_window : null
+        nowMs: root.nowMs
+        moonFraction: root.panel ? root.panel.moon.fraction : 0
+        waxing: root.panel ? root.panel.moon.waxing : true
+        south: root.panel ? root.panel.south : false
+        foreground: root.fg
+        fontFamily: root.fontFamily
       }
 
       // ---- Lanes: cloud by layer (high, mid, low), jet-stream seeing proxy, Kp; then hour ticks
@@ -718,8 +554,8 @@ BarWidget {
         height: Style.space(84)
         visible: root.line !== null
 
-        readonly property real labelW: root.gutter
-        readonly property real laneW: width - labelW * 2
+        readonly property real labelW: skyTimeline.plotLeft
+        readonly property real laneW: skyTimeline.plotWidth
         readonly property real row: Style.space(7)
 
         Repeater {

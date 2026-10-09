@@ -447,13 +447,16 @@ def timeline(plan, lat, lon, clouds=None, kp=None):
         moon.append(span('moon', cursor, w1))
 
     curves = {'sun': [], 'moon': [], 'core': []}
-    t = w0
-    while t <= w1 + timedelta(minutes=1):
+    times = []
+    samples = minute_range(w0, w1, 10)
+    if samples[-1] < w1:
+        samples.append(w1)
+    for t in samples:
+        times.append(clock(t))
         jd = julian_day(t)
         curves['sun'].append([frac(t), round(sun_altitude(t, lat, lon), 1)])
         curves['moon'].append([frac(t), round(moon_topocentric_altitude(jd, lat, lon)[0], 1)])
         curves['core'].append([frac(t), round(core_altitude(t, lat, lon), 1)])
-        t += timedelta(minutes=10)
 
     def at(key):
         t = marks.get(key)
@@ -507,7 +510,7 @@ def timeline(plan, lat, lon, clouds=None, kp=None):
         t += timedelta(hours=1)
     return {'start_ms': int(w0.timestamp() * 1000), 'end_ms': int(w1.timestamp() * 1000),
             'sky': sky, 'moon': moon, 'core': [span('core', a, b) for a, b in plan['core_spans']],
-            'curves': curves, 'events': events, 'core_best': core_best, 'moon_dir': moon_dir,
+            'curves': curves, 'times': times, 'events': events, 'core_best': core_best, 'moon_dir': moon_dir,
             'clouds': cloud_bins if clouds else None,
             'cloud_pct': round(sum(in_dark) / len(in_dark)) if in_dark else None,
             'kp': kp_bins if kp else None,

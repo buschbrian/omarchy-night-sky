@@ -116,6 +116,18 @@ class Reports(unittest.TestCase):
         self.assertIsNone(line['clouds'])
         self.assertIsNone(line['kp'])
 
+    def test_timeline_cursor_clocks_use_location_zone_and_cover_endpoints(self):
+        zone = sky.ZoneInfo('Australia/Sydney')
+        report = sky.tonight(-33.87, 151.21, date(2026, 10, 20), 'Australia/Sydney')
+        line = sky.bar_output(report, None, -33.87, 151.21)['panel']['timeline']
+        self.assertEqual(len(line['times']), len(line['curves']['sun']))
+        for edge, key in ((0, 'start_ms'), (-1, 'end_ms')):
+            expected = datetime.fromtimestamp(line[key] / 1000, zone).strftime('%H:%M')
+            self.assertEqual(line['times'][edge], expected)
+        for curve in line['curves'].values():
+            self.assertEqual(curve[0][0], 0)
+            self.assertEqual(curve[-1][0], 1)
+
     def test_clouds_and_aurora_flag_the_pill(self):
         lat, lon = 40.6869, -111.838
         evening = datetime(2026, 10, 9, 18, tzinfo=sky.timezone.utc)

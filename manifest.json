@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "buschbrian.night-sky",
   "name": "Night sky",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Brian Busch",
   "license": "MIT",
   "description": "Next sunrise/sunset, moon phase and moon-free dark hours in one pill; click for a sky chart (golden, blue, twilight, night; sun, moon and Milky Way core altitude) with cloud and aurora lanes.",
