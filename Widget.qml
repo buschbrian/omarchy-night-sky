@@ -19,6 +19,7 @@ BarWidget {
   property int dayOffset: 0
   property bool popupOpen: false
   property real nowMs: Date.now()
+  property int tab: 0
 
   readonly property var panel: view ? view.panel : null
   readonly property var line: panel ? panel.timeline : null
@@ -37,6 +38,13 @@ BarWidget {
     var lat = String(setting("latitude", "")).trim(), lon = String(setting("longitude", "")).trim()
     if (lat !== "" && lon !== "" && !isNaN(Number(lat)) && !isNaN(Number(lon))) args.push("--lat", lat, "--lon", lon)
     if (!setting("network", true)) args.push("--offline")
+    var focal = Number(setting("focalLength", 0)), aperture = Number(setting("aperture", "")),
+        pitch = Number(setting("pixelPitch", "")), crop = Number(setting("cropFactor", "1"))
+    if (focal > 0) {
+      args.push("--focal", String(focal), "--crop", String(crop > 0 ? crop : 1))
+      if (aperture > 0) args.push("--aperture", String(aperture))
+      if (pitch > 0) args.push("--pitch", String(pitch))
+    }
     return args
   }
   onBaseArgsChanged: refresh()
@@ -45,7 +53,7 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  function close() { popupOpen = false; dayOffset = 0 }
+  function close() { popupOpen = false; dayOffset = 0; tab = 0 }
   function open() { view = night; popupOpen = true }
   function refresh() { if (!skyProc.running) skyProc.running = true }
 
@@ -93,6 +101,20 @@ BarWidget {
   }
 
   function rgba(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
+
+  readonly property var levelColors: ({ "go": "#4caf7a", "marginal": "#e3b341", "no-go": "#e0574f" })
+  readonly property var ratingColors: ({ good: "#4caf7a", marginal: "#e3b341", poor: "#e0574f", unavailable: "#808080", shown: "#808080" })
+  readonly property var factorNames: ({ moon_free_minutes: "Moon-free", cloud_cover_total: "Clouds", cloud_cover_max_hour: "Cloud peak",
+    aerosol_optical_depth: "Haze", wind_gust: "Gusts", dew_point_spread: "Dew spread", gc_max_altitude: "Core", jet_stream: "Jet stream" })
+
+  function jetColor(kmh) { return kmh === null || kmh === undefined ? "transparent" : kmh <= 70 ? "#4caf7a" : kmh <= 110 ? "#e3b341" : "#e0574f" }
+
+  function goToDate(iso) {
+    if (!night || !night.panel) return
+    var base = new Date(night.panel.date + "T12:00:00"), target = new Date(iso + "T12:00:00")
+    step(Math.round((target - base) / 86400000) - dayOffset)
+    tab = 0
+  }
 
   IpcHandler {
     target: "buschbrian.night-sky"
@@ -230,12 +252,43 @@ BarWidget {
             }
           }
 
+          Row {
+            spacing: Style.space(6)
+            visible: root.panel !== null && root.panel.shoot !== null
+            Rectangle {
+              readonly property color tone: root.panel && root.panel.shoot ? root.levelColors[root.panel.shoot.level] : root.fg
+              width: verdictText.implicitWidth + Style.space(16)
+              height: verdictText.implicitHeight + Style.space(6)
+              radius: height / 2
+              color: root.rgba(tone, 0.22)
+              border.width: 1
+              border.color: tone
+              Text {
+                id: verdictText
+                anchors.centerIn: parent
+                text: root.panel && root.panel.shoot ? root.panel.shoot.headline : ""
+                color: root.fg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+              }
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              visible: root.panel !== null && root.panel.shoot !== null && root.panel.shoot.aurora
+              text: "󰭄 aurora possible"
+              color: root.kpColor(root.auroraKp)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
           Text {
             width: parent.width
             text: root.panel ? root.panel.verdict : ""
-            color: root.view && root.view.class === "go" ? Color.accent : root.fg
+            color: Qt.darker(root.fg, 1.15)
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
           }
 
@@ -247,6 +300,29 @@ BarWidget {
           }
         }
       }
+
+      Row {
+        spacing: Style.space(4)
+        Repeater {
+          model: ["Tonight", "Week & events"]
+          Button {
+            required property var modelData
+            required property int index
+            text: modelData
+            selected: root.tab === index
+            bordered: root.tab === index
+            foreground: root.fg
+            fontSize: Style.font.bodySmall
+            onClicked: root.tab = index
+          }
+        }
+      }
+
+      Column {
+        id: tonightTab
+        width: parent.width
+        spacing: Style.space(10)
+        visible: root.tab === 0
 
       // ---- Sky chart: sky colour by sun altitude, altitude curves, now marker
       Item {
@@ -415,26 +491,28 @@ BarWidget {
         }
       }
 
-      // ---- Lanes: clouds by hour, Kp by 3-hour bin, then hour ticks
+      // ---- Lanes: cloud by layer (high, mid, low), jet-stream seeing proxy, Kp; then hour ticks
       Item {
         id: lanes
         width: parent.width
-        height: Style.space(48)
+        height: Style.space(84)
         visible: root.line !== null
 
         readonly property real labelW: root.gutter
         readonly property real laneW: width - labelW * 2
+        readonly property real row: Style.space(7)
 
         Repeater {
           model: [
-            ["Clouds", 0, root.line && root.line.cloud_pct !== null ? root.line.cloud_pct + "%" : "—"],
-            ["Aurora", Style.space(18), root.line && root.line.kp_max !== null ? "Kp " + root.line.kp_max.toFixed(1) : "—"]
+            ["Clouds", 0, Style.space(23), root.line && root.line.cloud_pct !== null ? root.line.cloud_pct + "%" : "—"],
+            ["Seeing", Style.space(28), Style.space(10), root.line && root.line.clouds ? "jet" : "—"],
+            ["Aurora", Style.space(44), Style.space(16), root.line && root.line.kp_max !== null ? "Kp " + root.line.kp_max.toFixed(1) : "—"]
           ]
           Item {
             required property var modelData
             y: modelData[1]
             width: lanes.width
-            height: Style.space(14)
+            height: modelData[2]
             Text {
               anchors.verticalCenter: parent.verticalCenter
               text: parent.modelData[0]
@@ -445,7 +523,7 @@ BarWidget {
             Text {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              text: parent.modelData[2]
+              text: parent.modelData[3]
               color: root.fg
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -458,15 +536,43 @@ BarWidget {
           }
         }
 
+        // High, mid and low cloud as three thin rows: high thin cloud often still shoots, low never does.
+        Repeater {
+          model: root.line && root.line.clouds ? root.line.clouds : []
+          Item {
+            id: hour
+            required property var modelData
+            x: lanes.labelW + modelData.a * lanes.laneW
+            width: Math.max(1, (modelData.b - modelData.a) * lanes.laneW - 1)
+            height: Style.space(23)
+            Repeater {
+              model: ["high", "mid", "low"]
+              Rectangle {
+                required property var modelData
+                required property int index
+                readonly property var pct: hour.modelData[modelData]
+                y: index * (lanes.row + Style.space(1))
+                width: hour.width
+                height: lanes.row
+                radius: Style.space(1)
+                color: root.rgba(root.fg, 0.06 + 0.8 * ((pct === null || pct === undefined ? hour.modelData.total : pct) / 100))
+              }
+            }
+          }
+        }
+
         Repeater {
           model: root.line && root.line.clouds ? root.line.clouds : []
           Rectangle {
             required property var modelData
+            visible: modelData.jet !== null && modelData.jet !== undefined
             x: lanes.labelW + modelData.a * lanes.laneW
+            y: Style.space(28)
             width: Math.max(1, (modelData.b - modelData.a) * lanes.laneW - 1)
-            height: Style.space(14)
+            height: Style.space(10)
             radius: Style.space(2)
-            color: root.rgba(root.fg, 0.08 + 0.72 * modelData.total / 100)
+            color: root.jetColor(modelData.jet)
+            opacity: 0.8
           }
         }
 
@@ -476,9 +582,9 @@ BarWidget {
             required property var modelData
             readonly property real fill: Math.max(0.12, Math.min(1, modelData.kp / 9))
             x: lanes.labelW + modelData.a * lanes.laneW
-            y: Style.space(18) + Style.space(14) * (1 - fill)
+            y: Style.space(44) + Style.space(16) * (1 - fill)
             width: Math.max(1, (modelData.b - modelData.a) * lanes.laneW - 1)
-            height: Style.space(14) * fill
+            height: Style.space(16) * fill
             radius: Style.space(2)
             color: root.kpColor(modelData.kp)
             opacity: modelData.observed === "predicted" ? 0.75 : 1
@@ -489,7 +595,7 @@ BarWidget {
         Rectangle {
           visible: root.line !== null && root.line.kp !== null
           x: lanes.labelW; width: lanes.laneW; height: 1
-          y: Style.space(18) + Style.space(14) * (1 - root.auroraKp / 9)
+          y: Style.space(44) + Style.space(16) * (1 - root.auroraKp / 9)
           color: root.rgba(root.fg, 0.35)
         }
 
@@ -498,11 +604,41 @@ BarWidget {
           Text {
             required property var modelData
             x: lanes.labelW + modelData.at * lanes.laneW - implicitWidth / 2
-            y: Style.space(36)
+            y: Style.space(66)
             text: modelData.label
             color: Qt.darker(root.fg, 1.5)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
+          }
+        }
+      }
+
+      // ---- Every factor behind the verdict, coloured by its rating; gating ones carry a dot
+      Flow {
+        width: parent.width
+        spacing: Style.space(6)
+        visible: root.panel !== null && root.panel.shoot !== null && root.panel.shoot.factors.length > 0
+
+        Repeater {
+          model: root.panel && root.panel.shoot ? root.panel.shoot.factors : []
+          Rectangle {
+            required property var modelData
+            readonly property color tone: root.ratingColors[modelData.rating]
+            width: chip.implicitWidth + Style.space(14)
+            height: chip.implicitHeight + Style.space(6)
+            radius: Style.space(5)
+            color: root.rgba(tone, 0.14)
+            border.width: 1
+            border.color: root.rgba(tone, modelData.gates ? 0.9 : 0.4)
+            Text {
+              id: chip
+              anchors.centerIn: parent
+              text: (parent.modelData.gates ? "● " : "") + (root.factorNames[parent.modelData.key] || parent.modelData.label)
+                    + " " + parent.modelData.value
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
           }
         }
       }
@@ -637,10 +773,18 @@ BarWidget {
                 ? "Core best " + root.line.core_best.time + " · " + root.line.core_best.alt + "° " + root.line.core_best.dir + " (" + root.line.core_best.az + "°)"
                   + (root.line.core_best.moon_free ? "" : " · moonlit")
                 : "Milky Way core stays below the horizon in the dark"],
+              ["󰫢", Color.accent, root.panel.core_times
+                ? "Core " + (root.panel.core_times.rise ? "rises " + root.panel.core_times.rise.time + " " + root.panel.core_times.rise.dir : "up all night")
+                  + " · highest " + root.panel.core_times.transit.time + " " + root.panel.core_times.transit.alt + "° " + root.panel.core_times.transit.dir
+                  + (root.panel.core_times.set ? " · sets " + root.panel.core_times.set.time + " " + root.panel.core_times.set.dir : "")
+                : "Core never rises here"],
               ["󰽢", root.moonColor, root.line.moon_dir
                 ? "Moonrise " + root.line.moon_dir.time + " · " + root.line.moon_dir.dir + " (" + root.line.moon_dir.az + "°)"
                 : "No moonrise in this window"]
-            ].concat(root.panel.notes.map(function(n) {
+            ].concat(root.panel.exposure ? [["󰄀", root.fg,
+                root.panel.exposure.focal + " mm" + (root.panel.exposure.aperture ? " f/" + root.panel.exposure.aperture : "") + ": "
+                + (root.panel.exposure.npf ? root.panel.exposure.npf + " s NPF (core) · " : "")
+                + root.panel.exposure.rule500 + " s 500 rule"]] : []).concat(root.panel.notes.map(function(n) {
               return [n.indexOf("Aurora") === 0 ? "󰭄" : "󰖐", n.indexOf("Aurora") === 0 ? root.kpColor(root.auroraKp) : root.fg, n]
             })) : []
 
@@ -659,6 +803,119 @@ BarWidget {
                 color: root.fg
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
+              }
+            }
+          }
+        }
+      }
+      }
+
+      // ---- Week & events
+      Column {
+        id: weekTab
+        width: parent.width
+        spacing: Style.space(10)
+        visible: root.tab === 1
+
+        Row {
+          id: weekRow
+          width: parent.width
+          spacing: Style.space(6)
+          Repeater {
+            model: root.panel && root.panel.week ? root.panel.week : []
+            Rectangle {
+              id: dayCard
+              required property var modelData
+              readonly property color tone: root.levelColors[modelData.level]
+              width: (weekRow.width - Style.space(6) * 6) / 7
+              height: Style.space(104)
+              radius: Style.space(8)
+              color: root.rgba(tone, 0.12)
+              border.width: modelData.date === (root.panel ? root.panel.date : "") ? 2 : 1
+              border.color: root.rgba(tone, modelData.date === (root.panel ? root.panel.date : "") ? 1 : 0.45)
+
+              Column {
+                anchors.centerIn: parent
+                spacing: Style.space(3)
+                Text { anchors.horizontalCenter: parent.horizontalCenter; text: dayCard.modelData.day; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+                Text { anchors.horizontalCenter: parent.horizontalCenter; text: Qt.formatDate(new Date(dayCard.modelData.date + "T12:00:00"), "d"); color: Qt.darker(root.fg, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                Text { anchors.horizontalCenter: parent.horizontalCenter; text: dayCard.modelData.glyph; color: root.moonColor; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+                Rectangle { anchors.horizontalCenter: parent.horizontalCenter; width: Style.space(28); height: Style.space(5); radius: height / 2; color: dayCard.tone }
+                Text { anchors.horizontalCenter: parent.horizontalCenter; text: Math.floor(dayCard.modelData.moon_free_minutes / 60) + "h" + ("0" + dayCard.modelData.moon_free_minutes % 60).slice(-2); color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰖐 " + dayCard.modelData.cloud + (dayCard.modelData.incomplete ? "?" : ""); color: Qt.darker(root.fg, 1.3); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                hoverEnabled: true
+                onEntered: if (root.bar) root.bar.showTooltip(dayCard, dayCard.modelData.headline + (dayCard.modelData.aurora ? " · aurora possible" : ""))
+                onExited: if (root.bar) root.bar.hideTooltip(dayCard)
+                onClicked: root.goToDate(dayCard.modelData.date)
+              }
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          text: "Verdict colour, moon-free dark and mean cloud for each night; ? means part of the forecast (haze) doesn't reach that far yet. Click a night to open it."
+          color: Qt.darker(root.fg, 1.6)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
+        PanelSeparator { foreground: root.fg }
+
+        Text {
+          text: "Next 30 days"
+          color: root.fg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+        }
+
+        Repeater {
+          model: root.panel && root.panel.events ? root.panel.events : []
+          Row {
+            id: eventLine
+            required property var modelData
+            width: weekTab.width
+            spacing: Style.space(8)
+            Text {
+              width: Style.space(76)
+              text: eventLine.modelData.date
+              color: Qt.darker(root.fg, 1.4)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              width: Style.space(14)
+              text: ({ moon: "󰽢", season: "󰖨", shower: "󰫢", festival: "󰋼", other: "󰋼" })[eventLine.modelData.kind] || "•"
+              color: eventLine.modelData.good ? "#4caf7a" : root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+            Column {
+              width: eventLine.width - Style.space(76) - Style.space(14) - Style.space(16)
+              Text {
+                width: parent.width
+                text: eventLine.modelData.title
+                color: root.fg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: eventLine.modelData.good
+                elide: Text.ElideRight
+              }
+              Text {
+                width: parent.width
+                visible: text !== ""
+                text: eventLine.modelData.detail
+                color: Qt.darker(root.fg, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
               }
             }
           }

@@ -203,5 +203,103 @@ class Standalone(unittest.TestCase):
         self.assertGreater(out['panel']['timeline']['core_best']['alt'], 40)
 
 
+class Planner(unittest.TestCase):
+    """The features brought over from dark-sky-shot-planner."""
+    SLC = (40.76, -111.89)
+    TZ = 'America/Denver'
+
+    def night(self, day=date(2026, 10, 20)):
+        report = sky.tonight(*self.SLC, day, self.TZ)
+        return report, report['_plan']
+
+    def hours(self, plan, **values):
+        a = plan['darkness'][0].replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+        base = {'total': 5, 'low': 0, 'mid': 0, 'high': 5, 'gust': 10, 'temp': 10, 'dew': 0, 'jet': 40, 'aod': 0.05}
+        return [dict(base, time=(a + timedelta(hours=h)).strftime('%Y-%m-%dT%H:%M'), **values) for h in range(14)]
+
+    def test_rate_follows_the_thresholds_file(self):
+        spec = sky.thresholds()['cloud_cover_total']
+        self.assertEqual([sky.rate(v, spec) for v in (10, 40, 80, None)], ['good', 'marginal', 'poor', 'unavailable'])
+        self.assertEqual(sky.rate(1.0, sky.thresholds()['dew_point_spread']), 'poor')
+
+    def test_verdict_names_the_worst_gating_factor(self):
+        report, plan = sky.tonight(*self.SLC, date(2026, 10, 9), self.TZ), None
+        plan = report['_plan']
+        clear = sky.shoot_verdict(plan, report, *self.SLC, self.hours(plan))
+        self.assertEqual(clear['level'], 'go')
+        windy = sky.shoot_verdict(plan, report, *self.SLC, self.hours(plan, gust=55))
+        self.assertEqual((windy['level'], windy['headline']), ('no-go', 'No-go · gusts 55 km/h'))
+        dewy = sky.shoot_verdict(plan, report, *self.SLC, self.hours(plan, dew=9.5))
+        self.assertEqual(dewy['level'], 'go')  # dew is an advisory, never a gate
+
+    def test_missing_or_stale_data_caps_at_marginal(self):
+        report = sky.tonight(*self.SLC, date(2026, 10, 9), self.TZ)
+        plan = report['_plan']
+        no_aod = sky.shoot_verdict(plan, report, *self.SLC, self.hours(plan, aod=None))
+        self.assertEqual((no_aod['level'], no_aod['incomplete']), ('marginal', True))
+        now = datetime(2026, 10, 9, 18, tzinfo=sky.timezone.utc)
+        stale = sky.shoot_verdict(plan, report, *self.SLC, self.hours(plan), (now - timedelta(hours=7)).isoformat(),
+                                  now=now)
+        self.assertEqual(stale['level'], 'marginal')
+        self.assertEqual(sky.shoot_verdict(plan, report, *self.SLC, None)['level'], 'marginal')
+
+    def test_aurora_never_lowers_the_verdict(self):
+        report = sky.tonight(*self.SLC, date(2026, 10, 9), self.TZ)
+        plan = report['_plan']
+        v = sky.shoot_verdict(plan, report, *self.SLC, self.hours(plan), kp_max=7)
+        self.assertEqual((v['level'], v['aurora']), ('go', True))
+
+    def test_bright_moon_is_a_no_go(self):
+        report = sky.tonight(*self.SLC, date(2026, 10, 25), self.TZ)
+        v = sky.shoot_verdict(report['_plan'], report, *self.SLC, self.hours(report['_plan']))
+        self.assertEqual(v['level'], 'no-go')
+        self.assertTrue(v['headline'].startswith('No-go · moon'))
+
+    def test_week_has_seven_nights(self):
+        report, plan = self.night()
+        days = sky.week(*self.SLC, date(2026, 10, 20), None, None, self.TZ)
+        self.assertEqual([d['date'] for d in days][::6], ['2026-10-20', '2026-10-26'])
+        self.assertTrue(all(d['level'] in ('marginal', 'no-go') for d in days))  # no conditions data
+
+    def test_core_rises_southeast_and_sets_southwest(self):
+        report, plan = self.night(date(2026, 6, 15))
+        t = sky.core_times(plan, *self.SLC)
+        self.assertTrue(110 < t['rise']['az'] < 150 and 210 < t['set']['az'] < 250)
+        self.assertAlmostEqual(t['transit']['az'], 180, delta=3)
+        self.assertAlmostEqual(t['transit']['alt'], 90 - 40.76 - 29.0, delta=1)
+
+    def test_moon_phases_and_equinox_match_published_times(self):
+        events = sky.sky_events(*self.SLC, date(2026, 9, 15), self.TZ, [], days=45)
+        at = {e['title']: datetime.fromisoformat(e['at']) for e in events}
+        utc = lambda text: datetime.fromisoformat(text).replace(tzinfo=sky.timezone.utc)
+        # USNO: September equinox 2026-09-23 00:05 UT; new moon 2026-10-10 15:50 UT; full moon 2026-10-26 04:12 UT
+        for title, want in [('September equinox', '2026-09-23T00:05'), ('New moon', '2026-10-10T15:50'),
+                            ('Full moon', '2026-10-26T04:12')]:
+            got = [t for k, t in at.items() if k == title][0] if title != 'New moon' else \
+                [datetime.fromisoformat(e['at']) for e in events if e['title'] == 'New moon'][-1]
+            self.assertLess(abs((got - utc(want)).total_seconds()), 20 * 60, title)
+
+    def test_showers_are_judged_here(self):
+        curated = sky.load_bundled_curated()
+        events = sky.sky_events(*self.SLC, date(2026, 10, 15), self.TZ, curated)
+        orionids = next(e for e in events if e['title'].startswith('Orionids'))
+        self.assertIn('moon 8', orionids['detail'])  # an 80-something-percent moon at the 21 Oct peak
+        self.assertIn('better', orionids['detail'])
+        south = sky.sky_events(-33.87, 151.21, date(2026, 10, 15), 'Australia/Sydney', curated)
+        self.assertTrue(any(e['title'].startswith('Orionids') for e in south))
+
+    def test_precession_moves_ra_forward(self):
+        ra, dec = sky.precess(0.0, 0.0, datetime(2026, 1, 1, tzinfo=sky.timezone.utc))
+        self.assertAlmostEqual(ra, 26 * 3.075 * 15 / 3600, delta=0.02)
+        self.assertAlmostEqual(dec, 26 * 20.04 / 3600, delta=0.02)
+
+    def test_exposure(self):
+        out = sky.exposure(20, 1.8, 5.9)
+        self.assertEqual(out['rule500'], 25.0)
+        self.assertAlmostEqual(out['npf'], 6.5, delta=0.1)
+        self.assertEqual(sky.exposure(24, None, None, 1.5), {'focal': 24, 'aperture': None, 'rule500': 13.9})
+        self.assertIsNone(sky.exposure(None))
+
+
 if __name__ == '__main__':
     unittest.main()

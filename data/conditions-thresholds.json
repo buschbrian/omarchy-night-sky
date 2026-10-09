@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "status": "proposal: starting values, tune against real shoot nights and record changes in docs/ios/PLAN.md §Verdict",
+  "verdict_rule": "worst_gating_factor",
+  "window": "moon_free_darkness",
+  "factors": {
+    "moon_free_minutes": {
+      "label": "Moon-free darkness",
+      "unit": "min",
+      "better": "higher",
+      "good": 120,
+      "marginal": 45,
+      "gates_verdict": true
+    },
+    "cloud_cover_total": {
+      "label": "Cloud cover (mean over window)",
+      "unit": "%",
+      "better": "lower",
+      "good": 20,
+      "marginal": 50,
+      "gates_verdict": true
+    },
+    "cloud_cover_max_hour": {
+      "label": "Cloud cover (worst hour)",
+      "unit": "%",
+      "better": "lower",
+      "good": 40,
+      "marginal": 75,
+      "gates_verdict": true
+    },
+    "aerosol_optical_depth": {
+      "label": "Haze / smoke (AOD, 550 nm)",
+      "unit": "",
+      "better": "lower",
+      "good": 0.1,
+      "marginal": 0.25,
+      "gates_verdict": true
+    },
+    "smoke_column": {
+      "label": "Smoke overhead (HRRR-Smoke, vertically integrated)",
+      "unit": "mg/m²",
+      "better": "lower",
+      "good": null,
+      "marginal": null,
+      "gates_verdict": false,
+      "note": "Primary smoke signal once calibrated. Set thresholds and the unit after the M3 unit calibration (docs/ios/PLAN.md), then turn gating on. Until then it is shown only."
+    },
+    "pm2_5": {
+      "label": "Surface smoke (PM2.5)",
+      "unit": "µg/m³",
+      "better": "lower",
+      "good": 12,
+      "marginal": 35,
+      "gates_verdict": false,
+      "note": "Surface PM2.5 is a health signal. Sky transparency follows AOD, so PM2.5 is shown but does not gate."
+    },
+    "transparency": {
+      "label": "Transparency (7Timer scale 1–8, 1 best)",
+      "unit": "",
+      "better": "lower",
+      "good": 3,
+      "marginal": 5,
+      "gates_verdict": true
+    },
+    "seeing": {
+      "label": "Seeing (7Timer scale 1–8, 1 best)",
+      "unit": "",
+      "better": "lower",
+      "good": 3,
+      "marginal": 5,
+      "gates_verdict": false,
+      "note": "Wide-field Milky Way work barely notices seeing. Shown for long-lens nights."
+    },
+    "wind_gust": {
+      "label": "Wind gusts",
+      "unit": "km/h",
+      "better": "lower",
+      "good": 20,
+      "marginal": 40,
+      "gates_verdict": true
+    },
+    "dew_point_spread": {
+      "label": "Temperature minus dew point",
+      "unit": "°C",
+      "better": "higher",
+      "good": 4,
+      "marginal": 2,
+      "gates_verdict": false,
+      "note": "Advisory: below the marginal value, say 'bring a dew heater', not 'don't go'."
+    },
+    "gc_max_altitude": {
+      "label": "Galactic Center peak altitude in window",
+      "unit": "°",
+      "better": "higher",
+      "good": 20,
+      "marginal": 12,
+      "gates_verdict": false,
+      "note": "Gates only when the plan's target is the Milky Way core. Marginal matches app-config gc_min_useful_altitude_deg."
+    }
+  },
+  "opportunities": {
+    "kp_index": {
+      "label": "Aurora chance (planetary Kp)",
+      "note": "Never lowers the verdict. At or above the latitude-dependent visible Kp, the verdict gets an 'aurora possible' flag."
+    }
+  }
+}

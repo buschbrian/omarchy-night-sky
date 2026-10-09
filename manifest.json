@@ -21,6 +21,10 @@
       { "key": "longitude", "type": "string", "label": "Longitude", "defaultValue": "", "description": "Decimal degrees, east positive." },
       { "key": "auroraKp", "type": "integer", "label": "Aurora Kp", "min": 3, "max": 9, "step": 1, "defaultValue": 6, "description": "Kp that flags an aurora chance. About 6 near 40-45° latitude, lower further poleward." },
       { "key": "network", "type": "boolean", "label": "Clouds and Kp", "defaultValue": true, "description": "Fetch hourly cloud cover (Open-Meteo) and planetary Kp (NOAA SWPC), at most once an hour." },
+      { "key": "focalLength", "type": "integer", "label": "Lens focal length (mm)", "min": 0, "max": 600, "step": 1, "defaultValue": 0, "description": "For the exposure helper. 0 hides it." },
+      { "key": "aperture", "type": "string", "label": "Aperture (f-number)", "defaultValue": "", "description": "e.g. 1.8. With pixel pitch, adds the NPF-rule time." },
+      { "key": "pixelPitch", "type": "string", "label": "Pixel pitch (µm)", "defaultValue": "", "description": "Sensor width ÷ horizontal pixels, e.g. 5.9 for a 24 MP full-frame sensor." },
+      { "key": "cropFactor", "type": "string", "label": "Crop factor", "defaultValue": "1", "description": "1 for full frame, 1.5 for APS-C, 2 for Micro Four Thirds." },
       { "key": "refreshMinutes", "type": "integer", "label": "Refresh (minutes)", "min": 5, "max": 60, "step": 5, "defaultValue": 10 }
     ]
   }
