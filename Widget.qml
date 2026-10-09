@@ -55,7 +55,9 @@ BarWidget {
 
   function close() { popupOpen = false; dayOffset = 0; tab = 0 }
   function open() { view = night; popupOpen = true }
-  function refresh() { if (!skyProc.running) skyProc.running = true }
+  property bool rerun: false
+  // A settings change while a run is in flight would otherwise be dropped.
+  function refresh() { if (skyProc.running) rerun = true; else skyProc.running = true }
 
   function viewDate() {
     var d = new Date(night.panel.date + "T12:00:00")
@@ -120,11 +122,13 @@ BarWidget {
     target: "buschbrian.night-sky"
     function toggle(): void { if (root.popupOpen) root.close(); else root.open() }
     function step(days: int): void { root.step(days) }
+    function showTab(index: int): void { root.tab = index }
   }
 
   Process {
     id: skyProc
     command: root.baseArgs
+    onExited: if (root.rerun) { root.rerun = false; running = true }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -505,7 +509,8 @@ BarWidget {
         Repeater {
           model: [
             ["Clouds", 0, Style.space(23), root.line && root.line.cloud_pct !== null ? root.line.cloud_pct + "%" : "—"],
-            ["Seeing", Style.space(28), Style.space(10), root.line && root.line.clouds ? "jet" : "—"],
+            ["Seeing", Style.space(28), Style.space(10), root.line && root.line.clouds && root.line.clouds.length
+              ? Math.round(Math.max.apply(null, root.line.clouds.map(function(c) { return c.jet || 0 }))) + " km/h" : "—"],
             ["Aurora", Style.space(44), Style.space(16), root.line && root.line.kp_max !== null ? "Kp " + root.line.kp_max.toFixed(1) : "—"]
           ]
           Item {
