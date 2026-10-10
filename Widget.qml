@@ -7,10 +7,9 @@ import qs.Ui
 
 // Night sky for the Omarchy bar. Runs bin/night-sky --bar from this plugin's folder every
 // few minutes. Pill: next sunrise/sunset, moon glyph and moon-free dark hours, plus a cloud
-// or aurora glyph when the night calls for it. Left click opens the night panel, laid out in
-// the order a photographer asks: which night and where (‹ › and the location button), what
-// subject, is it worth going (verdict and best interval), then Night / Week & events /
-// Locations tabs. Right click refreshes.
+// or aurora glyph when the night calls for it. Left click opens the night panel: night, place,
+// verdict, best interval and subject always on top; then Tonight (chart, clouds, twilight),
+// Details, Week and Places tabs, most useful first. Right click refreshes.
 BarWidget {
   id: root
   moduleName: "buschbrian.night-sky"
@@ -46,11 +45,12 @@ BarWidget {
   readonly property real gutter: Style.space(52)
 
   // Design tokens: every glyph is one size in one column width; two text tones; theme spacing.
-  readonly property real iconSize: Style.font.icon
-  readonly property real iconBox: Style.space(18)
+  readonly property real iconSize: Style.font.iconSmall
+  readonly property real iconBox: Style.space(14)
   readonly property color muted: Qt.darker(fg, 1.5)
-  readonly property real sectionGap: Style.spacing.huge
-  readonly property real itemGap: Style.spacing.md
+  readonly property real sectionGap: Style.spacing.xxl
+  readonly property real itemGap: Style.spacing.sm
+  readonly property var tabs: ["Tonight", "Details", "Week", "Places"]
 
   readonly property string script: decodeURIComponent(Qt.resolvedUrl("bin/night-sky").toString().replace(/^file:\/\//, ""))
   readonly property real auroraKp: Number(setting("auroraKp", 6))
@@ -184,7 +184,6 @@ BarWidget {
   readonly property var factorNames: ({ shoot_minutes: "Target window", moon_free_minutes: "Moon-free", cloud_cover_total: "Clouds", cloud_cover_max_hour: "Cloud peak",
     aerosol_optical_depth: "Haze", wind_gust: "Gusts", dew_point_spread: "Dew spread", gc_max_altitude: "Core", jet_stream: "Jet stream" })
 
-  function jetColor(kmh) { return kmh === null || kmh === undefined ? "transparent" : kmh <= 70 ? "#4caf7a" : kmh <= 110 ? "#e3b341" : "#e0574f" }
 
   function goToDate(iso) {
     if (!night || !night.panel) return
@@ -197,7 +196,7 @@ BarWidget {
     target: "buschbrian.night-sky"
     function toggle(): void { if (root.popupOpen) root.close(); else root.open() }
     function step(days: int): void { root.step(days) }
-    function showTab(index: int): void { root.tab = Math.max(0, Math.min(2, index)); panelScroll.contentY = 0 }
+    function showTab(index: int): void { root.tab = Math.max(0, Math.min(root.tabs.length - 1, index)); panelScroll.contentY = 0 }
     function selectMode(key: string): void { if (root.modes.some(function(m) { return m.key === key })) root.mode = key }
     function selectLocation(name: string): void { if (name === "" || root.places.some(function(p) { return p.name === name })) root.savedLocation = name }
     function compare(): void { if (root.panel) root.comparePlaces() }
@@ -253,6 +252,7 @@ BarWidget {
           else {
             root.places = result.saved_locations
             root.locationMessage = "Saved locations updated."
+            placeNameField.text = ""; placeLat.text = ""; placeLon.text = ""; placeTz.text = ""
             root.comparison = []
             root.refresh()
           }
@@ -305,16 +305,19 @@ BarWidget {
     }
   }
 
-  PopupCard {
+  // KeyboardPanel, not PopupCard: an xdg-popup never receives keys, so the Places form could not be typed into.
+  KeyboardPanel {
     id: popup
     anchorItem: root
     bar: root.bar
     owner: root
     open: root.popupOpen && root.panel !== null
-    contentWidth: popup.fittedContentWidth(Style.space(540))
-    contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(620))
+    focusTarget: panelFocus
+    contentWidth: popup.fittedContentWidth(Style.space(440))
+    contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(560))
 
     FocusScope {
+      id: panelFocus
       anchors.fill: parent
       focus: true
       Keys.onEscapePressed: root.close()
@@ -329,196 +332,197 @@ BarWidget {
       interactive: contentHeight > height
       QQC.ScrollBar.vertical: QQC.ScrollBar {
         policy: QQC.ScrollBar.AsNeeded
-        contentItem: Rectangle { implicitWidth: Style.space(4); radius: width / 2; color: root.fg; opacity: 0.5 }
+        contentItem: Rectangle { implicitWidth: Style.space(3); radius: width / 2; color: root.fg; opacity: 0.5 }
       }
 
     Column {
       id: column
-      width: panelScroll.width - Style.space(10)
-      spacing: root.itemGap * 2
+      width: panelScroll.width - Style.space(8)
+      spacing: root.sectionGap
 
-      // ---- Which night and where: ‹ date › on the left, location and refresh on the right
-      Item {
+      // ================= Always visible: which night, where, and whether to go
+      Column {
         width: parent.width
-        height: Math.max(nightNavigation.implicitHeight, placeControls.implicitHeight)
+        spacing: root.itemGap
 
-        Row {
-          id: nightNavigation
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.spacing.xxs
-          Button { iconText: "󰅁"; foreground: root.fg; tooltipText: "Previous night"; focusable: true; onClicked: root.step(-1) }
-          Text {
-            anchors.verticalCenter: parent.verticalCenter
-            width: Math.min(implicitWidth, column.width - placeControls.width - Style.space(140))
-            elide: Text.ElideRight
-            text: root.title()
-            color: root.fg
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.title
-            font.bold: true
-          }
-          Button { iconText: "󰅂"; foreground: root.fg; tooltipText: "Next night"; focusable: true; onClicked: root.step(1) }
-          TextChoice {
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.dayOffset !== 0
-            text: "back to tonight"
-            ruled: false
-            foreground: root.fg
-            fontFamily: root.fontFamily
-            onActivated: root.step(-root.dayOffset)
-          }
-        }
-
-        Row {
-          id: placeControls
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.spacing.xxs
-          Text {
-            anchors.verticalCenter: parent.verticalCenter
-            text: "󰍎"
-            color: root.muted
-            font.family: root.fontFamily
-            font.pixelSize: root.iconSize
-          }
-          TextChoice {
-            readonly property string name: root.panel && root.panel.location ? root.panel.location.name : ""
-            anchors.verticalCenter: parent.verticalCenter
-            bottomPadding: 0
-            text: name.length > 22 ? name.slice(0, 21) + "…" : name
-            ruled: false
-            foreground: root.fg
-            fontFamily: root.fontFamily
-            onActivated: { root.tab = 2; panelScroll.contentY = 0 }
-          }
-          Button {
-            iconText: "󰑐"
-            foreground: root.fg
-            tooltipText: "Refresh"
-            focusable: true
-            iconSpinning: skyProc.running || browseProc.running
-            onClicked: { root.refresh(); if (root.dayOffset !== 0) root.browse() }
-          }
-        }
-      }
-
-      // ---- What you are shooting; the verdict below depends on it
-      Row {
-        spacing: Style.spacing.xxxl
-        Text {
-          text: "Shooting"
-          color: root.muted
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          bottomPadding: Style.space(4)
-        }
-        Repeater {
-          model: root.modes
-          TextChoice {
-            required property var modelData
-            text: modelData.label
-            selected: root.mode === modelData.key
-            foreground: root.fg
-            fontFamily: root.fontFamily
-            onActivated: root.mode = modelData.key
-          }
-        }
-      }
-
-      // ---- Is it worth going, and when: shaded moon, verdict, best interval
-      Row {
-        width: parent.width
-        spacing: Style.spacing.xxl
-
-        Canvas {
-          id: moonCanvas
-          width: Style.space(48)
-          height: width
-          anchors.verticalCenter: parent.verticalCenter
-          property real fraction: root.panel ? root.panel.moon.fraction : 0
-          property bool waxing: root.panel ? root.panel.moon.waxing : true
-          onFractionChanged: requestPaint()
-          onWaxingChanged: requestPaint()
-          onPaint: {
-            var ctx = getContext("2d")
-            ctx.reset()
-            var r = width / 2 - 1, cx = width / 2, cy = height / 2
-            // Lit on the right while waxing as seen from the northern hemisphere; mirrored south.
-            var side = (waxing ? 1 : -1) * (root.panel && root.panel.south ? -1 : 1), k = 1 - 2 * fraction
-            var night = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, 0, cx, cy, r)
-            night.addColorStop(0, root.rgba(root.fg, 0.16)); night.addColorStop(1, root.rgba(root.fg, 0.05))
-            ctx.fillStyle = night
-            ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.fill()
-            // Lit limb from the top round to the bottom, back up along the terminator.
-            var lit = ctx.createRadialGradient(cx + side * r * 0.35, cy - r * 0.35, 0, cx, cy, r)
-            lit.addColorStop(0, "#fffaf0"); lit.addColorStop(0.6, root.moonColor); lit.addColorStop(1, "#a9a28c")
-            ctx.fillStyle = lit
-            ctx.beginPath()
-            ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2, side < 0)
-            for (var i = 0; i <= 32; i++) {
-              var t = Math.PI / 2 - Math.PI * i / 32
-              ctx.lineTo(cx + side * k * r * Math.cos(t), cy + r * Math.sin(t))
-            }
-            ctx.fill()
-          }
-        }
-
-        Column {
-          width: parent.width - moonCanvas.width - parent.spacing
-          spacing: Style.spacing.xs
-          anchors.verticalCenter: parent.verticalCenter
+        Item {
+          width: parent.width
+          height: Math.max(nightNavigation.implicitHeight, placeControls.implicitHeight)
 
           Row {
-            spacing: Style.spacing.md
-            visible: root.shoot !== null
-            Text {
-              id: verdictText
-              readonly property string headline: root.shoot ? root.shoot.headline : ""
-              readonly property int split: headline.indexOf(" · ")
-              textFormat: Text.StyledText
-              text: root.shoot ? "<b><font color=\"" + root.levelColors[root.shoot.level] + "\">"
-                    + (split < 0 ? headline : headline.slice(0, split)) + "</font></b>"
-                    + (split < 0 ? "" : "&nbsp;&nbsp;" + headline.slice(split + 3)) : ""
-              color: root.fg
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.title
-              MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                onEntered: if (root.bar) root.bar.showTooltip(verdictText, "Whole target window. The chart outlines the best interval.")
-                onExited: if (root.bar) root.bar.hideTooltip(verdictText)
-              }
-            }
+            id: nightNavigation
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 0
+            Button { iconText: "󰅁"; iconSize: root.iconSize; horizontalPadding: Style.spacing.xs; verticalPadding: Style.spacing.xxs; foreground: root.fg; tooltipText: "Previous night"; focusable: true; onClicked: root.step(-1) }
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              visible: root.shoot !== null && root.shoot.aurora === true
-              text: "󰭄"
-              color: root.kpColor(root.auroraKp)
+              width: Math.min(implicitWidth, column.width - placeControls.width - Style.space(110))
+              elide: Text.ElideRight
+              text: root.title()
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+            Button { iconText: "󰅂"; iconSize: root.iconSize; horizontalPadding: Style.spacing.xs; verticalPadding: Style.spacing.xxs; foreground: root.fg; tooltipText: "Next night"; focusable: true; onClicked: root.step(1) }
+            TextChoice {
+              anchors.verticalCenter: parent.verticalCenter
+              bottomPadding: 0
+              visible: root.dayOffset !== 0
+              text: "tonight"
+              ruled: false
+              foreground: root.fg
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              onActivated: root.step(-root.dayOffset)
+            }
+          }
+
+          Row {
+            id: placeControls
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.xxs
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "󰍎"
+              color: root.muted
               font.family: root.fontFamily
               font.pixelSize: root.iconSize
             }
+            TextChoice {
+              readonly property string name: root.panel && root.panel.location ? root.panel.location.name : ""
+              anchors.verticalCenter: parent.verticalCenter
+              bottomPadding: 0
+              text: name.length > 20 ? name.slice(0, 19) + "…" : name
+              ruled: false
+              foreground: root.fg
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              onActivated: { root.tab = 3; panelScroll.contentY = 0 }
+            }
+            Button {
+              iconText: "󰑐"
+              iconSize: root.iconSize
+              horizontalPadding: Style.spacing.xs
+              verticalPadding: Style.spacing.xxs
+              foreground: root.fg
+              tooltipText: "Refresh"
+              focusable: true
+              iconSpinning: skyProc.running || browseProc.running
+              onClicked: { root.refresh(); if (root.dayOffset !== 0) root.browse() }
+            }
+          }
+        }
+
+        // The answer: shaded moon, verdict, best interval
+        Row {
+          width: parent.width
+          spacing: Style.spacing.lg
+
+          Canvas {
+            id: moonCanvas
+            width: Style.space(34)
+            height: width
+            anchors.verticalCenter: parent.verticalCenter
+            property real fraction: root.panel ? root.panel.moon.fraction : 0
+            property bool waxing: root.panel ? root.panel.moon.waxing : true
+            onFractionChanged: requestPaint()
+            onWaxingChanged: requestPaint()
+            onPaint: {
+              var ctx = getContext("2d")
+              ctx.reset()
+              var r = width / 2 - 1, cx = width / 2, cy = height / 2
+              // Lit on the right while waxing as seen from the northern hemisphere; mirrored south.
+              var side = (waxing ? 1 : -1) * (root.panel && root.panel.south ? -1 : 1), k = 1 - 2 * fraction
+              var night = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, 0, cx, cy, r)
+              night.addColorStop(0, root.rgba(root.fg, 0.16)); night.addColorStop(1, root.rgba(root.fg, 0.05))
+              ctx.fillStyle = night
+              ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.fill()
+              // Lit limb from the top round to the bottom, back up along the terminator.
+              var lit = ctx.createRadialGradient(cx + side * r * 0.35, cy - r * 0.35, 0, cx, cy, r)
+              lit.addColorStop(0, "#fffaf0"); lit.addColorStop(0.6, root.moonColor); lit.addColorStop(1, "#a9a28c")
+              ctx.fillStyle = lit
+              ctx.beginPath()
+              ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2, side < 0)
+              for (var i = 0; i <= 32; i++) {
+                var t = Math.PI / 2 - Math.PI * i / 32
+                ctx.lineTo(cx + side * k * r * Math.cos(t), cy + r * Math.sin(t))
+              }
+              ctx.fill()
+            }
           }
 
-          Text {
-            width: parent.width
-            readonly property var best: root.panel ? root.panel.best_window : null
-            text: best ? "Best " + best.headline + " · " + root.duration(best.minutes)
-                    + (best.incomplete ? " · incomplete forecast" : "") + (best.stale ? " · stale forecast" : "")
-                  : "No usable interval left for this subject in the forecast."
-            color: best ? root.fg : root.muted
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
+          Column {
+            width: parent.width - moonCanvas.width - parent.spacing
+            spacing: Style.spacing.xxs
+            anchors.verticalCenter: parent.verticalCenter
 
+            Row {
+              spacing: Style.spacing.sm
+              visible: root.shoot !== null
+              Text {
+                id: verdictText
+                readonly property string headline: root.shoot ? root.shoot.headline : ""
+                readonly property int split: headline.indexOf(" · ")
+                textFormat: Text.StyledText
+                text: root.shoot ? "<b><font color=\"" + root.levelColors[root.shoot.level] + "\">"
+                      + (split < 0 ? headline : headline.slice(0, split)) + "</font></b>"
+                      + (split < 0 ? "" : "&nbsp;&nbsp;" + headline.slice(split + 3)) : ""
+                color: root.fg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  onEntered: if (root.bar) root.bar.showTooltip(verdictText, "Whole target window. The chart outlines the best interval.")
+                  onExited: if (root.bar) root.bar.hideTooltip(verdictText)
+                }
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: root.shoot !== null && root.shoot.aurora === true
+                text: "󰭄"
+                color: root.kpColor(root.auroraKp)
+                font.family: root.fontFamily
+                font.pixelSize: root.iconSize
+              }
+            }
+
+            Text {
+              width: parent.width
+              readonly property var best: root.panel ? root.panel.best_window : null
+              text: best ? "Best " + best.headline + " · " + root.duration(best.minutes)
+                      + (best.incomplete ? " · incomplete forecast" : "") + (best.stale ? " · stale forecast" : "")
+                    : "No usable interval left in the forecast"
+              color: best ? root.fg : root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+          }
+        }
+
+        Row {
+          spacing: Style.spacing.lg
           Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: root.panel ? (root.panel.subject ? root.panel.subject + " · " : "")
-                  + root.panel.moon.phase + " · " + root.panel.moon.illumination_pct + "% lit · moon " + root.moonTimes() : ""
+            text: "Shooting"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
+            bottomPadding: Style.space(4)
+          }
+          Repeater {
+            model: root.modes
+            TextChoice {
+              required property var modelData
+              text: modelData.label
+              selected: root.mode === modelData.key
+              foreground: root.fg
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              onActivated: root.mode = modelData.key
+            }
           }
         }
       }
@@ -530,9 +534,9 @@ BarWidget {
         Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.rgba(root.fg, 0.12) }
         Row {
           id: tabRow
-          spacing: Style.spacing.huge
+          spacing: Style.spacing.xxxl
           Repeater {
-            model: ["Night", "Week & events", "Locations"]
+            model: root.tabs
             TextChoice {
               required property var modelData
               required property int index
@@ -540,80 +544,21 @@ BarWidget {
               selected: root.tab === index
               foreground: root.fg
               fontFamily: root.fontFamily
-              fontSize: Style.font.body
               onActivated: { root.tab = index; panelScroll.contentY = 0 }
             }
           }
         }
       }
 
-      // ================= Night
+      // ================= Tonight: when, at a glance
       Column {
-        id: tonightTab
         width: parent.width
         spacing: root.sectionGap
-        visible: root.tab === 0
+        visible: root.tab === 0 && root.line !== null
 
-        // ---- Conditions: every factor behind the verdict; advice-only ones have italic labels
         Column {
           width: parent.width
           spacing: root.itemGap
-          visible: root.shoot !== null && root.shoot.factors.length > 0
-          PanelSectionHeader { text: "Conditions"; foreground: root.fg; fontFamily: root.fontFamily }
-          Grid {
-            id: factorGrid
-            width: parent.width
-            columns: 3
-            columnSpacing: Style.spacing.xxl
-            rowSpacing: root.itemGap
-            Repeater {
-              model: root.shoot ? root.shoot.factors.slice().sort(function(a, b) { return (b.gates ? 1 : 0) - (a.gates ? 1 : 0) }) : []
-              Column {
-                id: factorCell
-                required property var modelData
-                width: (factorGrid.width - factorGrid.columnSpacing * 2) / 3
-                Text {
-                  width: parent.width
-                  elide: Text.ElideRight
-                  text: root.factorNames[factorCell.modelData.key] || factorCell.modelData.label
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.italic: !factorCell.modelData.gates
-                }
-                Text {
-                  width: parent.width
-                  elide: Text.ElideRight
-                  text: factorCell.modelData.value
-                  color: factorCell.modelData.rating === "good" ? root.fg : root.ratingColors[factorCell.modelData.rating]
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: factorCell.modelData.rating === "poor"
-                }
-              }
-            }
-          }
-        }
-
-        // ---- Sky: chart, lanes on the same time axis, legend, data ages
-        Column {
-          width: parent.width
-          spacing: root.itemGap
-          visible: root.line !== null
-
-          Item {
-            width: parent.width
-            height: skyHeader.implicitHeight
-            PanelSectionHeader { id: skyHeader; text: "Sky"; foreground: root.fg; fontFamily: root.fontFamily }
-            Text {
-              anchors.right: parent.right
-              anchors.bottom: parent.bottom
-              text: skyTimeline.selectedTime + " · " + skyTimeline.selectedPhase
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
 
           SkyTimeline {
             id: skyTimeline
@@ -633,180 +578,43 @@ BarWidget {
             bandColors: root.bandColors
           }
 
-          // Lanes: cloud by layer (high, mid, low), jet-stream seeing proxy, Kp; then the one hour axis
-          Item {
-            id: lanes
+          Lanes {
             width: parent.width
-            height: Style.space(84)
-
-            readonly property real labelW: skyTimeline.plotLeft
-            readonly property real laneW: skyTimeline.plotWidth
-            readonly property real row: Style.space(7)
-
-            Repeater {
-              model: [
-                ["Clouds", 0, Style.space(23), root.line && root.line.cloud_pct !== null ? root.line.cloud_pct + "%" : "—"],
-                ["Seeing", Style.space(28), Style.space(10), root.line && root.line.clouds && root.line.clouds.length
-                  ? Math.round(Math.max.apply(null, root.line.clouds.map(function(c) { return c.jet || 0 }))) + " km/h" : "—"],
-                ["Aurora", Style.space(44), Style.space(16), root.line && root.line.kp_max !== null ? "Kp " + root.line.kp_max.toFixed(1) : "—"]
-              ]
-              Item {
-                id: laneRow
-                required property var modelData
-                y: modelData[1]
-                width: lanes.width
-                height: modelData[2]
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: laneRow.modelData[0]
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                // Same column as the chart's HZN / 10° marks.
-                Text {
-                  x: lanes.labelW + lanes.laneW + Style.space(4)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: laneRow.modelData[3]
-                  color: root.fg
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                Rectangle {
-                  x: lanes.labelW; width: lanes.laneW; height: parent.height
-                  color: root.rgba(root.fg, 0.05)
-                }
-              }
-            }
-
-            // High, mid and low cloud as three thin rows: high thin cloud often still shoots, low never does.
-            Repeater {
-              model: root.line && root.line.clouds ? root.line.clouds : []
-              Item {
-                id: hour
-                required property var modelData
-                x: lanes.labelW + modelData.a * lanes.laneW
-                width: Math.max(1, (modelData.b - modelData.a) * lanes.laneW - 1)
-                height: Style.space(23)
-                Repeater {
-                  model: ["high", "mid", "low"]
-                  Rectangle {
-                    required property var modelData
-                    required property int index
-                    readonly property var pct: hour.modelData[modelData]
-                    y: index * (lanes.row + Style.space(1))
-                    width: hour.width
-                    height: lanes.row
-                    color: root.rgba(root.fg, 0.06 + 0.8 * ((pct === null || pct === undefined ? hour.modelData.total : pct) / 100))
-                  }
-                }
-              }
-            }
-
-            Repeater {
-              model: root.line && root.line.clouds ? root.line.clouds : []
-              Rectangle {
-                required property var modelData
-                visible: modelData.jet !== null && modelData.jet !== undefined
-                x: lanes.labelW + modelData.a * lanes.laneW
-                y: Style.space(28)
-                width: Math.max(1, (modelData.b - modelData.a) * lanes.laneW - 1)
-                height: Style.space(10)
-                color: root.jetColor(modelData.jet)
-                opacity: 0.8
-              }
-            }
-
-            // Kp bins rise from the lane floor and fade toward it.
-            Repeater {
-              model: root.line && root.line.kp ? root.line.kp : []
-              Rectangle {
-                id: kpBin
-                required property var modelData
-                readonly property real fill: Math.max(0.12, Math.min(1, modelData.kp / 9))
-                readonly property color tone: root.kpColor(modelData.kp)
-                x: lanes.labelW + modelData.a * lanes.laneW
-                y: Style.space(44) + Style.space(16) * (1 - fill)
-                width: Math.max(1, (modelData.b - modelData.a) * lanes.laneW - 1)
-                height: Style.space(16) * fill
-                opacity: modelData.observed === "predicted" ? 0.6 : 1
-                gradient: Gradient {
-                  GradientStop { position: 0; color: kpBin.tone }
-                  GradientStop { position: 1; color: root.rgba(kpBin.tone, 0.25) }
-                }
-              }
-            }
-
-            // The aurora threshold from the widget settings (Kp 6 by default).
-            Rectangle {
-              visible: root.line !== null && root.line.kp !== null
-              x: lanes.labelW; width: lanes.laneW; height: 1
-              y: Style.space(44) + Style.space(16) * (1 - root.auroraKp / 9)
-              color: root.rgba(root.fg, 0.35)
-            }
-
-            Repeater {
-              model: root.line ? root.line.ticks : []
-              Text {
-                required property var modelData
-                x: lanes.labelW + modelData.at * lanes.laneW - implicitWidth / 2
-                y: Style.space(66)
-                text: modelData.label + ":00"
-                color: root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: "Hover or ← → to inspect · bold core: moon down, ≥10° · dashed: below horizon · Kp line: your threshold (Kp "
-                  + root.auroraKp + "), faded bins forecast" + (root.mode === "aurora" ? ". Kp is a planning guide, not a visibility prediction." : "")
-            color: root.muted
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-          Text {
-            width: parent.width
-            text: root.sourcesLine()
-            color: root.anyStale ? Color.urgent : root.muted
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
+            timeline: root.line
+            rows: ["clouds"]
+            plotLeft: skyTimeline.plotLeft
+            plotWidth: skyTimeline.plotWidth
+            foreground: root.fg
+            fontFamily: root.fontFamily
           }
         }
 
-        // ---- Evening and morning: each row is one twilight gradient, times under their colour
+        // Evening and morning: one twilight gradient per row, times under their colour
         Column {
           width: parent.width
           spacing: root.itemGap
-          visible: root.line !== null
-          PanelSectionHeader { text: "Evening and morning"; foreground: root.fg; fontFamily: root.fontFamily }
 
           Repeater {
             model: root.line ? [
               ["Evening", [
-                ["#dba254", "󰖛", "Golden", root.line.events.evening.golden],
-                ["#d9774f", "󰖚", "Sunset", root.line.events.evening.sunset],
-                ["#507fc4", "󰖔", "Blue" + root.minutesBetween(root.line.events.evening.blue, root.line.events.evening.blue_end), root.line.events.evening.blue],
-                ["#1c2742", "󰽤", "Dark", root.line.events.evening.dark]]],
+                ["#dba254", "Golden", root.line.events.evening.golden],
+                ["#d9774f", "Sunset", root.line.events.evening.sunset],
+                ["#507fc4", "Blue" + root.minutesBetween(root.line.events.evening.blue, root.line.events.evening.blue_end), root.line.events.evening.blue],
+                ["#1c2742", "Dark", root.line.events.evening.dark]]],
               ["Morning", [
-                ["#1c2742", "󰽥", "Dawn", root.line.events.morning.dawn],
-                ["#507fc4", "󰖔", "Blue" + root.minutesBetween(root.line.events.morning.blue, root.line.events.morning.golden), root.line.events.morning.blue],
-                ["#d9774f", "󰖜", "Sunrise", root.line.events.morning.sunrise],
-                ["#dba254", "󰖨", "Golden", "to " + root.line.events.morning.golden_end]]]
+                ["#1c2742", "Dawn", root.line.events.morning.dawn],
+                ["#507fc4", "Blue" + root.minutesBetween(root.line.events.morning.blue, root.line.events.morning.golden), root.line.events.morning.blue],
+                ["#d9774f", "Sunrise", root.line.events.morning.sunrise],
+                ["#dba254", "Golden to", root.line.events.morning.golden_end]]]
             ] : []
 
             Row {
               id: eventRow
               required property var modelData
               width: column.width
-              spacing: 0
 
               Text {
-                width: root.gutter
+                width: skyTimeline.plotLeft
                 anchors.verticalCenter: parent.verticalCenter
                 text: eventRow.modelData[0]
                 color: root.muted
@@ -815,12 +623,12 @@ BarWidget {
               }
 
               Column {
-                width: parent.width - root.gutter
-                spacing: Style.spacing.sm
+                width: parent.width - skyTimeline.plotLeft
+                spacing: Style.spacing.xxs
 
                 Rectangle {
                   width: parent.width
-                  height: Style.space(4)
+                  height: Style.space(3)
                   radius: height / 2
                   gradient: Gradient {
                     orientation: Gradient.Horizontal
@@ -835,23 +643,14 @@ BarWidget {
                   width: parent.width
                   Repeater {
                     model: eventRow.modelData[1]
-                    Row {
-                      id: eventCell
+                    Text {
                       required property var modelData
                       width: parent.width / 4
-                      spacing: Style.spacing.sm
-                      Text {
-                        width: root.iconBox
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: eventCell.modelData[1]
-                        color: root.muted
-                        font.family: root.fontFamily
-                        font.pixelSize: root.iconSize
-                      }
-                      Column {
-                        Text { text: eventCell.modelData[2]; color: root.muted; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                        Text { text: eventCell.modelData[3]; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-                      }
+                      textFormat: Text.StyledText
+                      text: "<font color=\"" + root.muted + "\">" + modelData[1] + "</font>&nbsp;" + modelData[2]
+                      color: root.fg
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
                     }
                   }
                 }
@@ -859,8 +658,75 @@ BarWidget {
             }
           }
         }
+      }
 
-        // ---- Where to point, and what might spoil it
+      // ================= Details: why, the other lanes, where to point, data
+      Column {
+        width: parent.width
+        spacing: root.sectionGap
+        visible: root.tab === 1
+
+        // Conditions: every factor behind the verdict; advice-only ones have italic labels
+        Column {
+          width: parent.width
+          spacing: root.itemGap
+          visible: root.shoot !== null && root.shoot.factors.length > 0
+          PanelSectionHeader { text: "Conditions"; foreground: root.fg; fontFamily: root.fontFamily }
+          Grid {
+            id: factorGrid
+            width: parent.width
+            columns: 3
+            columnSpacing: Style.spacing.xxl
+            rowSpacing: root.itemGap
+            Repeater {
+              model: root.shoot ? root.shoot.factors.slice().sort(function(a, b) { return (b.gates ? 1 : 0) - (a.gates ? 1 : 0) }) : []
+              Row {
+                id: factorCell
+                required property var modelData
+                width: (factorGrid.width - factorGrid.columnSpacing * 2) / 3
+                spacing: Style.spacing.sm
+                Text {
+                  width: parent.width * 0.55
+                  elide: Text.ElideRight
+                  text: root.factorNames[factorCell.modelData.key] || factorCell.modelData.label
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.italic: !factorCell.modelData.gates
+                }
+                Text {
+                  width: parent.width * 0.45 - parent.spacing
+                  elide: Text.ElideRight
+                  text: factorCell.modelData.value
+                  color: factorCell.modelData.rating === "good" ? root.fg : root.ratingColors[factorCell.modelData.rating]
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: factorCell.modelData.rating === "poor"
+                }
+              }
+            }
+          }
+        }
+
+        Column {
+          width: parent.width
+          spacing: root.itemGap
+          visible: root.line !== null
+          PanelSectionHeader { text: "Seeing and aurora"; foreground: root.fg; fontFamily: root.fontFamily }
+          Lanes {
+            width: parent.width
+            timeline: root.line
+            rows: ["seeing", "aurora"]
+            plotLeft: skyTimeline.plotLeft
+            plotWidth: skyTimeline.plotWidth
+            auroraKp: root.auroraKp
+            kpColor: root.kpColor
+            foreground: root.fg
+            fontFamily: root.fontFamily
+          }
+        }
+
+        // Where to point, and what might spoil it
         Column {
           width: parent.width
           spacing: root.itemGap
@@ -869,11 +735,11 @@ BarWidget {
 
           Row {
             width: parent.width
-            spacing: Style.spacing.xxl
+            spacing: Style.spacing.lg
 
             Canvas {
               id: compassCanvas
-              width: Style.space(64)
+              width: Style.space(48)
               height: width
               property var core: root.line ? root.line.core_best : null
               property var moonDir: root.line ? root.line.moon_dir : null
@@ -882,7 +748,7 @@ BarWidget {
               onPaint: {
                 var ctx = getContext("2d")
                 ctx.reset()
-                var cx = width / 2, cy = height / 2, r = width / 2 - 8
+                var cx = width / 2, cy = height / 2, r = width / 2 - 7
                 var dial = ctx.createRadialGradient(cx, cy, 0, cx, cy, r)
                 dial.addColorStop(0, root.rgba(root.fg, 0.02)); dial.addColorStop(1, root.rgba(root.fg, 0.1))
                 ctx.fillStyle = dial
@@ -891,10 +757,10 @@ BarWidget {
                 ctx.lineWidth = 1
                 ctx.stroke()
                 ctx.fillStyle = root.rgba(root.fg, 0.6)
-                ctx.font = Style.font.caption + "px '" + root.fontFamily + "'"
+                ctx.font = Math.round(Style.font.caption * 0.8) + "px '" + root.fontFamily + "'"
                 ctx.textAlign = "center"
                 ctx.textBaseline = "middle"
-                ctx.fillText("N", cx, 5)
+                ctx.fillText("N", cx, 4)
                 function arrow(az, color, len, w) {
                   var a = (az - 90) * Math.PI / 180
                   ctx.strokeStyle = color
@@ -905,7 +771,7 @@ BarWidget {
                   ctx.beginPath(); ctx.arc(cx + Math.cos(a) * len, cy + Math.sin(a) * len, w + 1, 0, 2 * Math.PI); ctx.fill()
                 }
                 if (moonDir) arrow(moonDir.az, root.moonColor, r - 2, 1.5)
-                if (core) arrow(core.az, root.coreColor, r - 2, 2.5)
+                if (core) arrow(core.az, root.coreColor, r - 2, 2)
                 ctx.fillStyle = root.fg
                 ctx.beginPath(); ctx.arc(cx, cy, 2, 0, 2 * Math.PI); ctx.fill()
               }
@@ -915,7 +781,7 @@ BarWidget {
               id: pointList
               width: parent.width - compassCanvas.width - parent.spacing
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.spacing.sm
+              spacing: Style.spacing.xs
 
               Repeater {
                 model: root.line ? [
@@ -929,8 +795,9 @@ BarWidget {
                       + (root.panel.core_times.set ? " · sets " + root.panel.core_times.set.time + " " + root.panel.core_times.set.dir : "")
                     : "Core never rises here"],
                   ["󰽢", root.moonColor, root.line.moon_dir
-                    ? "Moonrise " + root.line.moon_dir.time + " · " + root.line.moon_dir.dir + " (" + root.line.moon_dir.az + "°)"
-                    : "No moonrise in this window"]
+                    ? "Moonrise " + root.line.moon_dir.time + " · " + root.line.moon_dir.dir + " (" + root.line.moon_dir.az + "°) · "
+                      + root.panel.moon.phase + ", " + root.panel.moon.illumination_pct + "% lit"
+                    : root.panel.moon.phase + ", " + root.panel.moon.illumination_pct + "% lit · moon " + root.moonTimes()]
                 ].concat(root.panel.exposure ? [["󰄀", root.fg,
                     root.panel.exposure.focal + " mm" + (root.panel.exposure.aperture ? " f/" + root.panel.exposure.aperture : "") + ": "
                     + (root.panel.exposure.npf ? root.panel.exposure.npf + " s NPF (core) · " : "")
@@ -957,11 +824,34 @@ BarWidget {
                     text: pointRow.modelData[2]
                     color: root.fg
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
+                    font.pixelSize: Style.font.caption
                   }
                 }
               }
             }
+          }
+        }
+
+        Column {
+          width: parent.width
+          spacing: root.itemGap
+          PanelSectionHeader { text: "Reading the chart"; foreground: root.fg; fontFamily: root.fontFamily }
+          Text {
+            width: parent.width
+            text: "Hover or ← → on the chart to inspect · bold core: moon down, ≥10° · dashed: below horizon · Kp line: your threshold (Kp "
+                  + root.auroraKp + "), faded bins forecast" + (root.mode === "aurora" ? ". Kp is a planning guide, not a visibility prediction." : "")
+            color: root.muted
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+          Text {
+            width: parent.width
+            text: root.sourcesLine()
+            color: root.anyStale ? Color.urgent : root.muted
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
           }
         }
       }
@@ -971,36 +861,12 @@ BarWidget {
         id: weekTab
         width: parent.width
         spacing: root.sectionGap
-        visible: root.tab === 1
+        visible: root.tab === 2
 
         Column {
           width: parent.width
           spacing: root.itemGap
           PanelSectionHeader { text: "Next seven nights"; foreground: root.fg; fontFamily: root.fontFamily }
-
-          Repeater {
-            model: root.panel && root.panel.week ? root.panel.week.filter(function(n) { return n.recommended }) : []
-            Text {
-              required property var modelData
-              width: weekTab.width
-              text: "Best upcoming · " + modelData.day + " " + modelData.date + " · " + modelData.best_window.headline
-                + " · " + root.duration(modelData.best_window.minutes)
-                + modelData.best_window.factors.filter(function(f) { return f.key === "wind_gust" }).map(function(f) { return " · gusts " + f.value }).join("")
-              color: root.fg
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.WordWrap
-            }
-          }
-          Text {
-            width: parent.width
-            visible: root.panel !== null && root.panel.week !== null && !root.panel.week.some(function(n) { return n.recommended })
-            text: "No best night yet: a recommendation needs a usable interval with a complete, fresh forecast."
-            color: root.muted
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
 
           Row {
             id: weekRow
@@ -1012,14 +878,14 @@ BarWidget {
                 required property var modelData
                 readonly property color tone: root.levelColors[modelData.level]
                 width: weekRow.width / 7
-                height: dayColumn.implicitHeight + Style.spacing.lg * 2
+                height: dayColumn.implicitHeight + Style.spacing.md * 2
                 activeFocusOnTab: true
                 Keys.onReturnPressed: root.goToDate(modelData.date)
 
                 // Hover and focus wash, strongest at the top.
                 Rectangle {
                   anchors.fill: parent
-                  radius: Style.space(6)
+                  radius: Style.space(5)
                   visible: dayArea.containsMouse || dayCard.activeFocus
                   gradient: Gradient {
                     GradientStop { position: 0; color: root.rgba(root.fg, 0.1) }
@@ -1030,15 +896,13 @@ BarWidget {
                 Column {
                   id: dayColumn
                   anchors.centerIn: parent
-                  spacing: Style.spacing.xs
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: dayCard.modelData.recommended ? "Best" : " "; color: Color.accent; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: dayCard.modelData.day; color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: Qt.formatDate(new Date(dayCard.modelData.date + "T12:00:00"), "d"); color: root.muted; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                  spacing: Style.spacing.xxs
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: dayCard.modelData.day + " " + Qt.formatDate(new Date(dayCard.modelData.date + "T12:00:00"), "d"); color: dayCard.modelData.recommended ? Color.accent : root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
                   Text { anchors.horizontalCenter: parent.horizontalCenter; text: dayCard.modelData.glyph; color: root.moonColor; font.family: root.fontFamily; font.pixelSize: root.iconSize }
                   Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    width: Style.space(32)
-                    height: Style.space(4)
+                    width: Style.space(26)
+                    height: Style.space(3)
                     radius: height / 2
                     gradient: Gradient {
                       orientation: Gradient.Horizontal
@@ -1048,12 +912,7 @@ BarWidget {
                     }
                   }
                   Text { anchors.horizontalCenter: parent.horizontalCenter; text: root.duration(dayCard.modelData.moon_free_minutes); color: root.fg; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                  Row {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    spacing: Style.spacing.xxs
-                    Text { anchors.verticalCenter: parent.verticalCenter; text: "󰖐"; color: root.muted; font.family: root.fontFamily; font.pixelSize: root.iconSize }
-                    Text { anchors.verticalCenter: parent.verticalCenter; text: dayCard.modelData.cloud + (dayCard.modelData.incomplete ? "?" : ""); color: root.muted; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                  }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: dayCard.modelData.cloud + (dayCard.modelData.incomplete ? "?" : ""); color: root.muted; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
                 }
 
                 MouseArea {
@@ -1071,7 +930,9 @@ BarWidget {
 
           Text {
             width: parent.width
-            text: "Bar colour: verdict for the whole target window · Best: the strongest interval with a complete, fresh forecast · ?: incomplete data · click a night to open it"
+            text: root.panel && root.panel.week && root.panel.week.some(function(n) { return n.recommended })
+                  ? "Accent: best night with a complete, fresh forecast · bar: verdict · moon-free hours · cloud · click to open"
+                  : "No best night yet: that needs a usable interval with a complete, fresh forecast · click a night to open it"
             color: root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -1090,9 +951,9 @@ BarWidget {
               id: eventLine
               required property var modelData
               width: weekTab.width
-              spacing: Style.spacing.lg
+              spacing: Style.spacing.md
               Text {
-                width: Style.space(76)
+                width: Style.space(62)
                 text: eventLine.modelData.date
                 color: root.muted
                 font.family: root.fontFamily
@@ -1106,13 +967,13 @@ BarWidget {
                 font.pixelSize: root.iconSize
               }
               Column {
-                width: eventLine.width - Style.space(76) - root.iconBox - eventLine.spacing * 2
+                width: eventLine.width - Style.space(62) - root.iconBox - eventLine.spacing * 2
                 Text {
                   width: parent.width
                   text: eventLine.modelData.title
                   color: root.fg
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
+                  font.pixelSize: Style.font.caption
                   font.bold: eventLine.modelData.good
                   elide: Text.ElideRight
                 }
@@ -1131,11 +992,11 @@ BarWidget {
         }
       }
 
-      // ================= Locations: pick, remove or compare places, then add one
+      // ================= Places: pick, remove or compare, then add one
       Column {
         id: locationsTab
         width: parent.width
-        visible: root.tab === 2
+        visible: root.tab === 3
         spacing: root.sectionGap
 
         Column {
@@ -1154,6 +1015,7 @@ BarWidget {
               ruled: false
               foreground: root.fg
               fontFamily: root.fontFamily
+              fontSize: Style.font.caption
               onActivated: root.comparePlaces()
             }
           }
@@ -1165,26 +1027,28 @@ BarWidget {
               required property var modelData
               readonly property bool isDefault: modelData.name === ""
               width: locationsTab.width
-              height: placeName.implicitHeight
+              height: placeChoice.implicitHeight
 
               TextChoice {
-                id: placeName
+                id: placeChoice
                 text: placeRow.isDefault ? "Default location" : placeRow.modelData.name
                 selected: root.savedLocation === placeRow.modelData.name
                 foreground: root.fg
                 fontFamily: root.fontFamily
+                fontSize: Style.font.caption
                 onActivated: root.savedLocation = placeRow.modelData.name
               }
               Text {
-                x: placeName.width + Style.spacing.lg
+                x: placeChoice.width + Style.spacing.lg
+                anchors.baseline: placeChoice.baseline
                 text: placeRow.isDefault ? "widget settings or Omarchy weather" : placeRow.modelData.tz
                 color: root.muted
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
-                anchors.baseline: placeName.baseline
               }
               TextChoice {
                 anchors.right: parent.right
+                anchors.baseline: placeChoice.baseline
                 visible: !placeRow.isDefault
                 enabled: !placeProc.running
                 text: "remove"
@@ -1192,18 +1056,11 @@ BarWidget {
                 foreground: root.fg
                 fontFamily: root.fontFamily
                 fontSize: Style.font.caption
-                anchors.baseline: placeName.baseline
                 onActivated: root.removePlace(placeRow.modelData.name)
               }
             }
           }
-        }
 
-        Column {
-          width: parent.width
-          spacing: root.itemGap
-          visible: root.comparison.length > 0
-          PanelSectionHeader { text: "Compared for " + root.title().replace(/^(Tonight|Tomorrow) · /, ""); foreground: root.fg; fontFamily: root.fontFamily }
           Repeater {
             model: root.comparison
             Text {
@@ -1218,7 +1075,7 @@ BarWidget {
                        : modelData.shoot.headline + " · no usable interval")
               color: root.fg
               font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
           }
@@ -1232,10 +1089,17 @@ BarWidget {
           Row {
             width: parent.width
             spacing: root.itemGap
-            TextField { id: placeLat; width: (parent.width - parent.spacing) / 2; placeholderText: "Latitude · e.g. 38.29"; foreground: root.fg; Keys.onEscapePressed: root.close() }
-            TextField { id: placeLon; width: (parent.width - parent.spacing) / 2; placeholderText: "Longitude · e.g. -111.26"; foreground: root.fg; Keys.onEscapePressed: root.close() }
+            TextField { id: placeLat; width: (parent.width - parent.spacing) / 2; placeholderText: "Latitude · 38.29"; foreground: root.fg; Keys.onEscapePressed: root.close() }
+            TextField { id: placeLon; width: (parent.width - parent.spacing) / 2; placeholderText: "Longitude · -111.26"; foreground: root.fg; Keys.onEscapePressed: root.close() }
           }
-          TextField { id: placeTz; width: parent.width; placeholderText: "Time zone · e.g. America/Denver"; foreground: root.fg; Keys.onEscapePressed: root.close() }
+          TextField {
+            id: placeTz
+            width: parent.width
+            placeholderText: "Time zone · America/Denver"
+            foreground: root.fg
+            Keys.onEscapePressed: root.close()
+            Keys.onReturnPressed: if (saveButton.enabled) root.savePlace()
+          }
           Item {
             width: parent.width
             height: saveButton.implicitHeight
@@ -1246,6 +1110,7 @@ BarWidget {
               ruled: false
               foreground: root.fg
               fontFamily: root.fontFamily
+              fontSize: Style.font.caption
               onActivated: {
                 if (!root.panel || !root.panel.location) return
                 var p = root.panel.location
@@ -1258,7 +1123,9 @@ BarWidget {
               text: "Save"
               bordered: true
               foreground: root.fg
-              fontSize: Style.font.bodySmall
+              fontSize: Style.font.caption
+              horizontalPadding: Style.spacing.lg
+              verticalPadding: Style.spacing.xs
               enabled: !placeProc.running && placeNameField.text.trim() !== "" && placeLat.text.trim() !== "" && placeLon.text.trim() !== ""
               focusable: true
               onClicked: root.savePlace()
@@ -1267,7 +1134,7 @@ BarWidget {
           Text {
             width: parent.width
             text: root.locationMessage !== "" ? root.locationMessage
-                  : "Times and evening dates follow the place's time zone. Saving an existing name replaces it."
+                  : "Times follow the place's time zone. Saving an existing name replaces it."
             color: root.locationMessage !== "" ? root.fg : root.muted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

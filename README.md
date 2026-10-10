@@ -6,36 +6,36 @@ A bar widget for the [Omarchy](https://omarchy.org) shell, made for planning nig
 
 The pill shows the next sunrise or sunset, tonight's moon phase and how long the moon-free darkness lasts. A cloud glyph appears when the dark hours are mostly clouded over, and an aurora glyph when the Kp forecast reaches your threshold. The pill is highlighted on a night rated "go".
 
-Click it for the night panel. The top of the panel answers, in order: which night and where (‹ › step nights, "back to tonight" returns, the location name opens Locations, 󰑐 refreshes), what you are shooting (Milky Way, meteors, aurora or moonlit), and whether it is worth going: the verdict, the best interval and the moon. Three tabs follow, each split into labelled sections.
+Click it for the night panel. It puts the most useful information first and the rest behind tabs.
 
-**Night** has:
+**Always at the top**: ‹ date › to step nights ("tonight" returns), the location (click it for Places), refresh, then the answer and the subject.
 
 - **A shoot verdict**: go, marginal or no-go, plus the factor that decides it ("No-go · clouds 95%"). It uses a worst-factor rule over the moon-free dark window. The factors that can block a night are moon-free time, mean and worst-hour cloud, haze (aerosol optical depth) and wind gusts. Dew, core altitude and the jet stream are shown as advice. Missing hourly coverage or cloud/haze forecasts older than six hours keep the night at "marginal" at best. Kp does not lower the whole-window assessment; it flags an aurora opportunity.
-- **Photography modes**: Milky Way requires the core above 10° in moon-free astronomical darkness; meteors use the highest-ZHR active curated shower with its radiant above 10° in moon-free darkness; aurora uses astronomical darkness without requiring the moon to be down; moonlit landscapes use the moon above the horizon, at least 10% lit, with the sun below −6°. The mode assessment covers all target intervals, with a one-hour interval rated good and 30 minutes marginal. The core altitude gates Milky Way mode only. Meteor mode names unverified curated showers explicitly.
 - **A best interval**, separate from the whole-window assessment. It searches at five-minute resolution, excludes elapsed time, and ranks intervals of at least 30 minutes by rating, then complete/fresh coverage, duration, and earlier start. It considers both clear runs and longer mixed runs, so a clear hour can win over an otherwise marginal night. The selected interval is outlined on the chart, with its cloud cover, direction and duration. Aurora intervals additionally need overlapping Kp at or above your threshold; stale Kp keeps an interval marginal. Missing weather produces a provisional interval, never a confident go.
+- **Photography modes**: Milky Way requires the core above 10° in moon-free astronomical darkness; meteors use the highest-ZHR active curated shower with its radiant above 10° in moon-free darkness; aurora uses astronomical darkness without requiring the moon to be down; moonlit landscapes use the moon above the horizon, at least 10% lit, with the sun below −6°. The mode assessment covers all target intervals, with a one-hour interval rated good and 30 minutes marginal. The core altitude gates Milky Way mode only. Meteor mode names unverified curated showers explicitly.
+
+**Tonight** (the default tab) fits without scrolling:
+
 - **A sky chart** from evening golden hour to the end of morning golden hour, coloured by the sun's altitude: golden hour (+6° to −4°), blue hour (−4° to −6°), twilight, and night. Amber sun, ivory moon and cyan Milky Way core paths share an altitude scale that grows with the highest object, with the horizon and a 10° core guide marked. Below-horizon paths are dashed. Hover or drag to inspect all three altitudes at a location-local time; click to pin the cursor, or focus the chart and use arrow keys (Home/End jump to the edges). The moon marker shows its phase. The core line is bold where it is at least 10° up in moon-free dark, and a red line marks now.
-- **Lanes** along the same time axis:
-  - cloud by layer (high, mid, low)
-  - a seeing proxy from the 250 hPa jet-stream wind
-  - planetary Kp in 3-hour bins
+- **Cloud by layer** (high, mid, low) on the same time axis.
+- **Evening and morning**: one twilight gradient per row with golden hour, sunset, blue hour, astronomical dark, dawn and sunrise under their colours.
+
+**Details**:
+
 - **Conditions**: every factor behind the whole-window verdict, with marginal and poor values coloured. Factors that only advise have italic labels.
-- **One update line** with the age of the clouds/wind, haze and Kp data. It turns red when any of them is stale, and missing data is labelled.
-- **Evening and morning times**: golden hour, sunset, blue hour, astronomical dark, dawn and sunrise.
-- **Where to point**:
-  - the core's best time, altitude and direction
-  - its rise, highest point and set
-  - where the moon rises
-  - optionally, the longest exposure before stars trail, by the NPF and 500 rules, for your lens
+- **Seeing and aurora** lanes: a seeing proxy from the 250 hPa jet-stream wind, and planetary Kp in 3-hour bins with your threshold marked.
+- **Where to point**: the core's best time, altitude and direction; its rise, highest point and set; the moon's rise and phase; optionally, the longest exposure before stars trail by the NPF and 500 rules for your lens.
+- **Reading the chart**: the legend, and one update line with the age of the clouds/wind, haze and Kp data. It turns red when any of them is stale.
 
-**Week & events** has:
+**Week**:
 
-- **The next seven nights**: verdict colour, moon phase, moon-free hours and mean cloud. Click a night to open it. The best upcoming interval is highlighted with its duration, clouds and gusts; only complete, fresh forecasts qualify. If none qualify, the panel says so.
+- **The next seven nights**: verdict colour, moon phase, moon-free hours and mean cloud. Click a night to open it. The best upcoming night is in the accent colour, with its best interval in the hover tooltip; only complete, fresh forecasts qualify. If none qualify, the panel says so.
 - **The next 30 days**:
   - moon phases, equinoxes and solstices
   - meteor showers, judged where you are: does the radiant clear 10° in darkness, how long is it up with the moon down, and is a nearby night better?
   - curated festivals
 
-**Locations** lists the default location (widget settings or Omarchy weather) and your saved places. Click one to show its sky, or "remove" to delete it. "compare this night" rates every place for the same evening and subject. Below the list, **Add a location** saves a name, latitude, longitude and IANA time zone to `~/.config/omarchy/night-sky-locations.json` (or under `XDG_CONFIG_HOME`). "copy displayed location" fills the form, and saving an existing name replaces it. All chart times and dates use each location's zone, shown in the header and comparison. The initial location still comes from widget settings or Omarchy weather. Saved locations stay out of the plugin repository.
+**Places** lists the default location (widget settings or Omarchy weather) and your saved places. Click one to show its sky, or "remove" to delete it. "compare this night" rates every place for the same evening and subject. Below the list, **Add a location** saves a name, latitude, longitude and IANA time zone to `~/.config/omarchy/night-sky-locations.json` (or under `XDG_CONFIG_HOME`). "copy displayed location" fills the form, and saving an existing name replaces it. All chart times and dates use each location's zone, shown in the header and comparison. The initial location still comes from widget settings or Omarchy weather. Saved locations stay out of the plugin repository. The form takes typing: the panel is a keyboard-focus surface, so click a field or Tab to it, and Enter in the time-zone field saves.
 
 ‹ › step to other nights. The wheel scrolls long panels. Right click the pill or click the panel's refresh button to recalculate; network requests retain the hourly cache limit. Escape closes the panel. Mode/location selections last for the widget session; set their defaults in widget settings to retain them across shell restarts.
 
@@ -47,7 +47,7 @@ omarchy plugin add https://github.com/buschbrian/omarchy-night-sky.git --enable
 
 Plugins install disabled unless you pass `--enable`, so you can read the code first. The widget lands in the right section; move it with `omarchy bar move buschbrian.night-sky --section <left|center|right>`.
 
-To open the panel from a key, bind `omarchy-shell buschbrian.night-sky toggle`. IPC also supports `showTab 0|1|2`, `selectMode milky-way|meteors|aurora|moonlit`, `selectLocation "saved name"` (empty for the configured location), and `compare`.
+To open the panel from a key, bind `omarchy-shell buschbrian.night-sky toggle`. IPC also supports `showTab 0|1|2|3` (Tonight, Details, Week, Places), `selectMode milky-way|meteors|aurora|moonlit`, `selectLocation "saved name"` (empty for the configured location), and `compare`.
 
 The helper supports `--save-location NAME --lat LAT --lon LON --tz ZONE`, `--list-locations`, `--remove-location NAME`, `--saved-location NAME`, and `--compare-locations`. `--mode` selects the same four subjects. Comparisons reuse the forecast caches and respect `--offline`.
 

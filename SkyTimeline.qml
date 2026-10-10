@@ -17,12 +17,13 @@ Item {
   property color coreColor: "#72d6db"
   property var bandColors: ({ golden: "#dba254", blue: "#507fc4", twilight: "#354568", dark: "#141e33", day: "#8fb4d9" })
   // The right gutter holds the HZN / 10° marks here and the lane readouts below the chart.
-  readonly property real plotLeft: Style.space(52)
-  readonly property real plotWidth: Math.max(1, width - plotLeft - Style.space(60))
+  property real plotHeight: Style.space(100)
+  readonly property real plotLeft: Style.space(40)
+  readonly property real plotWidth: Math.max(1, width - plotLeft - Style.space(52))
   readonly property var series: [
-    { key: "sun", name: "Sun", glyph: "󰖨", tone: sunColor },
-    { key: "moon", name: "Moon", glyph: "󰽢", tone: moonColor },
-    { key: "core", name: "Milky Way core", glyph: "󰫢", tone: coreColor }
+    { key: "sun", name: "Sun", short: "Sun", glyph: "󰖨", tone: sunColor },
+    { key: "moon", name: "Moon", short: "Moon", glyph: "󰽢", tone: moonColor },
+    { key: "core", name: "Milky Way core", short: "Core", glyph: "󰫢", tone: coreColor }
   ]
   readonly property var points: timeline ? timeline.curves.core : []
   property int pinnedIndex: -1
@@ -87,32 +88,34 @@ Item {
   Column {
     id: body
     width: parent.width
-    spacing: Style.space(6)
+    spacing: Style.spacing.sm
 
+    // Cursor time and phase, then each object's altitude: one line that reads as the chart's caption.
     Row {
       width: parent.width
-      spacing: Style.space(8)
+      spacing: Style.spacing.xxl
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: root.selectedTime + " " + root.selectedPhase
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
       Repeater {
         model: root.series
-        Column {
+        Row {
           id: readoutItem
           required property var modelData
-          width: (body.width - Style.space(16)) / 3
-          spacing: Style.space(3)
-          Row {
-            spacing: Style.space(4)
-            Text { width: Style.space(18); text: readoutItem.modelData.glyph; color: readoutItem.modelData.tone; font.family: root.fontFamily; font.pixelSize: root.iconSize }
-            Column {
-              Text { text: readoutItem.modelData.name; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-              Text {
-                readonly property var value: root.altitude(readoutItem.modelData.key)
-                text: value === null ? "–" : (value > 0 ? "+" : "") + value.toFixed(1) + "°" + (value < 0 ? " below" : "")
-                color: readoutItem.modelData.tone
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-              }
-            }
+          readonly property var value: root.altitude(modelData.key)
+          spacing: Style.spacing.xs
+          Text { anchors.verticalCenter: parent.verticalCenter; text: readoutItem.modelData.glyph; color: readoutItem.modelData.tone; font.family: root.fontFamily; font.pixelSize: root.iconSize }
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: readoutItem.modelData.short + " " + (readoutItem.value === null ? "–" : (readoutItem.value > 0 ? "+" : "") + readoutItem.value.toFixed(0) + "°")
+            color: readoutItem.value !== null && readoutItem.value < 0 ? Qt.darker(root.foreground, 1.5) : readoutItem.modelData.tone
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
           }
         }
       }
@@ -120,7 +123,7 @@ Item {
 
     Item {
       width: parent.width
-      height: Style.space(14)
+      height: Style.space(10)
       Canvas {
         id: strip
         x: root.plotLeft
@@ -150,7 +153,7 @@ Item {
             visible: implicitWidth + Style.space(8) < parent.width
             color: Qt.rgba(1, 1, 1, 0.85)
             font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Math.round(Style.font.caption * 0.8)
           }
         }
       }
@@ -159,7 +162,7 @@ Item {
     Item {
       id: plot
       width: parent.width
-      height: Style.space(145)
+      height: root.plotHeight
       Canvas {
         id: canvas
         x: root.plotLeft
@@ -188,7 +191,7 @@ Item {
           ctx.stroke(); ctx.setLineDash([])
         }
         function marker(ctx, key, x, y, tone) {
-          var r = Style.space(5)
+          var r = Style.space(4)
           ctx.fillStyle = "#101725"; ctx.strokeStyle = tone; ctx.lineWidth = 2
           ctx.beginPath(); ctx.arc(x, y, r + 3, 0, Math.PI * 2); ctx.fill()
           var globe = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, 0, x, y, r + 1)
