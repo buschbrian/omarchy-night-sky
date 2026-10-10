@@ -332,6 +332,7 @@ BarWidget {
       interactive: contentHeight > height
       QQC.ScrollBar.vertical: QQC.ScrollBar {
         policy: QQC.ScrollBar.AsNeeded
+        visible: panelScroll.contentHeight > panelScroll.height + 2
         contentItem: Rectangle { implicitWidth: Style.space(3); radius: width / 2; color: root.fg; opacity: 0.5 }
       }
 
