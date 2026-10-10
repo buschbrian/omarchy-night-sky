@@ -42,6 +42,36 @@ BarWidget {
   readonly property color sunColor: "#f2b347"
   readonly property color moonColor: "#ece6d2"
   readonly property color coreColor: "#72d6db"
+  readonly property color radiantColor: "#b48cff"
+  readonly property var subjectView: panel && panel.view ? panel.view : null
+  readonly property color focusColor: !subjectView || subjectView.focus === "core" ? coreColor : subjectView.focus === "radiant" ? radiantColor
+                                      : subjectView.focus === "moon" ? moonColor : kpColor(auroraKp)
+
+  // Where to point, by subject: the subject's own lines first, then the moon, exposure and notes.
+  function pointLines() {
+    if (!line || !panel) return []
+    var glyphs = { core: ["󰫢", coreColor], radiant: ["☄", radiantColor], moon: ["󰽢", moonColor], aurora: ["󰭄", kpColor(auroraKp)] }
+    var core = [
+      ["󰫢", coreColor, line.core_best
+        ? "Core best " + line.core_best.time + " · " + line.core_best.alt + "° " + line.core_best.dir + " (" + line.core_best.az + "°)"
+          + (line.core_best.moon_free ? "" : " · moonlit")
+        : "Milky Way core stays below the horizon in the dark"],
+      ["󰫢", coreColor, panel.core_times
+        ? "Core " + (panel.core_times.rise ? "rises " + panel.core_times.rise.time + " " + panel.core_times.rise.dir : "up all night")
+          + " · highest " + panel.core_times.transit.time + " " + panel.core_times.transit.alt + "° " + panel.core_times.transit.dir
+          + (panel.core_times.set ? " · sets " + panel.core_times.set.time + " " + panel.core_times.set.dir : "")
+        : "Core never rises here"]]
+    var moon = ["󰽢", moonColor, line.moon_dir
+      ? "Moonrise " + line.moon_dir.time + " · " + line.moon_dir.dir + " (" + line.moon_dir.az + "°) · " + panel.moon.phase + ", " + panel.moon.illumination_pct + "% lit"
+      : panel.moon.phase + ", " + panel.moon.illumination_pct + "% lit · moon " + moonTimes()]
+    var subject = !subjectView || mode === "milky-way" ? core
+      : subjectView.point.map(function(p) { return [glyphs[p[0]][0], glyphs[p[0]][1], p[1]] })
+    var exposureLine = panel.exposure ? [["󰄀", fg, panel.exposure.focal + " mm" + (panel.exposure.aperture ? " f/" + panel.exposure.aperture : "") + ": "
+      + (panel.exposure.npf ? panel.exposure.npf + " s NPF (core) · " : "") + panel.exposure.rule500 + " s 500 rule"]] : []
+    return subject.concat([moon], exposureLine, panel.notes.map(function(n) {
+      return [n.indexOf("Aurora") === 0 ? "󰭄" : "󰖐", n.indexOf("Aurora") === 0 ? kpColor(auroraKp) : muted, n]
+    }))
+  }
   readonly property real gutter: Style.space(52)
 
   // Design tokens: every glyph is one size in one column width; two text tones; theme spacing.
@@ -495,7 +525,7 @@ BarWidget {
               readonly property var best: root.panel ? root.panel.best_window : null
               text: best ? "Best " + best.headline + " · " + root.duration(best.minutes)
                       + (best.incomplete ? " · incomplete forecast" : "") + (best.stale ? " · stale forecast" : "")
-                    : "No usable interval left in the forecast"
+                    : root.subjectView && root.subjectView.why !== "" ? root.subjectView.why : "No usable interval left in the forecast"
               color: best ? root.fg : root.muted
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -577,12 +607,16 @@ BarWidget {
             moonColor: root.moonColor
             coreColor: root.coreColor
             bandColors: root.bandColors
+            radiantColor: root.radiantColor
+            view: root.subjectView
           }
 
           Lanes {
             width: parent.width
             timeline: root.line
-            rows: ["clouds"]
+            rows: root.mode === "aurora" ? ["clouds", "aurora"] : ["clouds"]
+            auroraKp: root.auroraKp
+            kpColor: root.kpColor
             plotLeft: skyTimeline.plotLeft
             plotWidth: skyTimeline.plotWidth
             foreground: root.fg
@@ -742,9 +776,11 @@ BarWidget {
               id: compassCanvas
               width: Style.space(48)
               height: width
-              property var core: root.line ? root.line.core_best : null
+              property var aim: root.subjectView ? root.subjectView.aim : null
+              property color aimColor: root.focusColor
               property var moonDir: root.line ? root.line.moon_dir : null
-              onCoreChanged: requestPaint()
+              onAimChanged: requestPaint()
+              onAimColorChanged: requestPaint()
               onMoonDirChanged: requestPaint()
               onPaint: {
                 var ctx = getContext("2d")
@@ -772,7 +808,7 @@ BarWidget {
                   ctx.beginPath(); ctx.arc(cx + Math.cos(a) * len, cy + Math.sin(a) * len, w + 1, 0, 2 * Math.PI); ctx.fill()
                 }
                 if (moonDir) arrow(moonDir.az, root.moonColor, r - 2, 1.5)
-                if (core) arrow(core.az, root.coreColor, r - 2, 2)
+                if (aim !== null && aim !== undefined) arrow(aim, aimColor, r - 2, 2)
                 ctx.fillStyle = root.fg
                 ctx.beginPath(); ctx.arc(cx, cy, 2, 0, 2 * Math.PI); ctx.fill()
               }
@@ -785,26 +821,7 @@ BarWidget {
               spacing: Style.spacing.xs
 
               Repeater {
-                model: root.line ? [
-                  ["󰫢", root.coreColor, root.line.core_best
-                    ? "Core best " + root.line.core_best.time + " · " + root.line.core_best.alt + "° " + root.line.core_best.dir + " (" + root.line.core_best.az + "°)"
-                      + (root.line.core_best.moon_free ? "" : " · moonlit")
-                    : "Milky Way core stays below the horizon in the dark"],
-                  ["󰫢", root.coreColor, root.panel.core_times
-                    ? "Core " + (root.panel.core_times.rise ? "rises " + root.panel.core_times.rise.time + " " + root.panel.core_times.rise.dir : "up all night")
-                      + " · highest " + root.panel.core_times.transit.time + " " + root.panel.core_times.transit.alt + "° " + root.panel.core_times.transit.dir
-                      + (root.panel.core_times.set ? " · sets " + root.panel.core_times.set.time + " " + root.panel.core_times.set.dir : "")
-                    : "Core never rises here"],
-                  ["󰽢", root.moonColor, root.line.moon_dir
-                    ? "Moonrise " + root.line.moon_dir.time + " · " + root.line.moon_dir.dir + " (" + root.line.moon_dir.az + "°) · "
-                      + root.panel.moon.phase + ", " + root.panel.moon.illumination_pct + "% lit"
-                    : root.panel.moon.phase + ", " + root.panel.moon.illumination_pct + "% lit · moon " + root.moonTimes()]
-                ].concat(root.panel.exposure ? [["󰄀", root.fg,
-                    root.panel.exposure.focal + " mm" + (root.panel.exposure.aperture ? " f/" + root.panel.exposure.aperture : "") + ": "
-                    + (root.panel.exposure.npf ? root.panel.exposure.npf + " s NPF (core) · " : "")
-                    + root.panel.exposure.rule500 + " s 500 rule"]] : []).concat(root.panel.notes.map(function(n) {
-                  return [n.indexOf("Aurora") === 0 ? "󰭄" : "󰖐", n.indexOf("Aurora") === 0 ? root.kpColor(root.auroraKp) : root.muted, n]
-                })) : []
+                model: root.pointLines()
 
                 Row {
                   id: pointRow
@@ -839,7 +856,10 @@ BarWidget {
           PanelSectionHeader { text: "Reading the chart"; foreground: root.fg; fontFamily: root.fontFamily }
           Text {
             width: parent.width
-            text: "Hover or ← → on the chart to inspect · bold core: moon down, ≥10° · dashed: below horizon · Kp line: your threshold (Kp "
+            text: "Hover or ← → on the chart to inspect · tinted: target windows · "
+                  + ({ "milky-way": "bold core: moon down, ≥10°", meteors: "violet: shower radiant, ≥10° counts", aurora: "any astronomical darkness counts",
+                       moonlit: "moon up, ≥10% lit, sun below −6°" })[root.mode]
+                  + " · dashed: below horizon · Kp line: your threshold (Kp "
                   + root.auroraKp + "), faded bins forecast" + (root.mode === "aurora" ? ". Kp is a planning guide, not a visibility prediction." : "")
             color: root.muted
             font.family: root.fontFamily

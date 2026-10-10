@@ -452,6 +452,36 @@ class PhotographyPlanning(unittest.TestCase):
         self.assertFalse(out['panel']['sources']['clouds']['stale'])
 
 
+class SubjectView(unittest.TestCase):
+    SLC = (40.76, -111.89)
+
+    def view(self, mode, day):
+        out = sky.bar_output(sky.tonight(*self.SLC, day, 'America/Denver'), lat=self.SLC[0], lon=self.SLC[1],
+                             curated=sky.load_bundled_curated(), extras=False, mode=mode)
+        return out['panel']['view'], out['panel']['timeline']
+
+    def test_each_mode_emphasises_its_own_object(self):
+        focus = {m: self.view(m, date(2026, 10, 21))[0]['focus'] for m in sky.MODES}
+        self.assertEqual(focus, {'milky-way': 'core', 'meteors': 'radiant', 'aurora': 'sky', 'moonlit': 'moon'})
+
+    def test_meteors_draw_the_radiant_on_the_chart_axis(self):
+        view, line = self.view('meteors', date(2026, 10, 21))
+        self.assertIn('Orionids', view['radiant']['name'])
+        self.assertEqual([x for x, _ in view['radiant']['curve']], [x for x, _ in line['curves']['core']])
+        self.assertTrue(view['targets'] and all(0 <= t['a'] < t['b'] <= 1 for t in view['targets']))
+        self.assertIn('radiant highest', view['point'][0][1])
+
+    def test_moonlit_new_moon_says_why(self):
+        view, _ = self.view('moonlit', date(2026, 10, 10))
+        self.assertEqual(view['targets'], [])
+        self.assertIn('lit', view['why'])
+
+    def test_moonlit_window_is_targeted(self):
+        view, _ = self.view('moonlit', date(2026, 10, 24))
+        self.assertTrue(view['targets'])
+        self.assertEqual(view['why'], '')
+
+
 class SavedLocations(unittest.TestCase):
     def run_cli(self, args):
         out = io.StringIO()

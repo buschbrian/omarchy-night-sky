@@ -641,23 +641,32 @@ def source_status(fetched, available, now):
     return {'updated': fetched, 'available': available, 'stale': age is None or age > 6 * 3600}
 
 
+def active_shower(plan, curated):
+    """The highest-ZHR curated shower active on this evening's date, or None."""
+    # The observing night starts on the evening date, even when its midpoint is after midnight.
+    day = evening_of(plan['phase_at'], plan['tz'])
+    showers = [e for e in curated or [] if e.get('kind') == 'meteor_shower'
+               and e.get('active_from', '9999') <= day.isoformat() <= e.get('active_to', '')
+               and e.get('radiant_ra_hours') is not None and e.get('radiant_dec_deg') is not None]
+    return max(showers, key=lambda e: (e.get('zhr') or 0, e['name']), default=None)
+
+
+def radiant_altitude(shower, t, lat, lon):
+    ra, dec = precess(shower['radiant_ra_hours'] * 15, shower['radiant_dec_deg'], t)
+    return altitude(ra, dec, julian_day(t), lat, lon)
+
+
 def target_windows(plan, lat, lon, mode, curated=None):
     if mode == 'milky-way':
         return plan['core_spans'], 'Milky Way core'
     if mode == 'aurora':
         return [plan['darkness']] if plan['darkness'] else [], 'Poleward horizon'
     if mode == 'meteors':
-        # The observing night starts on the evening date, even when its midpoint is after midnight.
-        day = evening_of(plan['phase_at'], plan['tz'])
-        showers = [e for e in curated or [] if e.get('kind') == 'meteor_shower'
-                   and e.get('active_from', '9999') <= day.isoformat() <= e.get('active_to', '')
-                   and e.get('radiant_ra_hours') is not None and e.get('radiant_dec_deg') is not None]
-        shower = max(showers, key=lambda e: (e.get('zhr') or 0, e['name']), default=None)
+        shower = active_shower(plan, curated)
         if not shower:
             return [], 'No active curated shower'
         def qualifies(t):
-            ra, dec = precess(shower['radiant_ra_hours'] * 15, shower['radiant_dec_deg'], t)
-            return altitude(ra, dec, julian_day(t), lat, lon) >= RADIANT_MIN_ALT
+            return radiant_altitude(shower, t, lat, lon) >= RADIANT_MIN_ALT
         spans = plan['moon_free']
         label = shower['name'] + (' (unverified)' if not shower.get('verified_on') else '')
     else:
@@ -674,6 +683,85 @@ def target_windows(plan, lat, lon, mode, curated=None):
         for start, end in merge_runs(times, [qualifies(t + step / 2) for t in times], step):
             out.append((start, min(end, b)))
     return out, label
+
+
+def subject_view(plan, lat, lon, mode, curated, line, kp=None, aurora_kp=AURORA_KP):
+    """What the panel shows for the chosen subject: the object to emphasise, its target windows as
+    chart spans, a radiant curve for meteors, why there is no window, and where to point."""
+    targets, label = target_windows(plan, lat, lon, mode, curated)
+    w0, w1 = line['start_ms'], line['end_ms']
+
+    def frac(t):
+        return max(0.0, min(1.0, (t.timestamp() * 1000 - w0) / (w1 - w0)))
+
+    def at(x):
+        return datetime.fromtimestamp((w0 + x * (w1 - w0)) / 1000, timezone.utc)
+
+    def highest(fn, spans):
+        best = None
+        for a, b in spans:
+            for t in minute_range(a, b, 10):
+                alt = fn(t)
+                if best is None or alt > best[1]:
+                    best = (t, alt)
+        return best
+
+    def where(t, ra, dec):
+        az = azimuth(ra, dec, julian_day(t), lat, lon)
+        return compass(az), round(az)
+
+    night = [(plan['sunset'], plan['sunrise'])] if plan['sunset'] and plan['sunrise'] else []
+    view = {'mode': mode, 'focus': {'milky-way': 'core', 'meteors': 'radiant', 'moonlit': 'moon', 'aurora': 'sky'}[mode],
+            'targets': [{'a': frac(a), 'b': frac(b), 'start': fmt_time(a, plan), 'end': fmt_time(b, plan)} for a, b in targets],
+            'radiant': None, 'why': '', 'point': [], 'aim': None}
+    poleward = 'N' if lat >= 0 else 'S'
+    if mode == 'milky-way':
+        if line.get('core_best'):
+            view['aim'] = line['core_best']['az']
+        if not targets:
+            view['why'] = ('The core never clears 10° in moon-free darkness tonight.' if plan['darkness']
+                           else 'No astronomical darkness tonight.')
+    elif mode == 'meteors':
+        shower = active_shower(plan, curated)
+        if not shower:
+            view['why'] = 'No curated meteor shower is active tonight.'
+        else:
+            curve = [[x, round(radiant_altitude(shower, at(x), lat, lon), 1)] for x, _ in line['curves']['core']]
+            name = shower['name'] + ('' if shower.get('verified_on') else ' (unverified)')
+            view['radiant'] = {'name': name, 'zhr': shower.get('zhr'), 'curve': curve}
+            peak = highest(lambda t: radiant_altitude(shower, t, lat, lon), plan['moon_free'] or night)
+            if peak:
+                ra, dec = precess(shower['radiant_ra_hours'] * 15, shower['radiant_dec_deg'], peak[0])
+                d, az = where(peak[0], ra, dec)
+                view['aim'] = az
+                view['point'].append(['radiant', f"{name} radiant highest {fmt_time(peak[0], plan)} · {peak[1]:.0f}° {d} ({az}°)"
+                                      + (f" · ZHR {shower['zhr']}" if shower.get('zhr') else '')])
+                view['point'].append(['radiant', 'Aim 40–60° away from the radiant, about 50° up, for longer trails'])
+            if not targets:
+                view['why'] = (f"{name}: radiant stays below 10° in moon-free darkness." if plan['moon_free']
+                               else f"{name}: the moon is up through the dark hours.")
+    elif mode == 'moonlit':
+        fraction = phase_info(plan['phase_at'])['fraction']
+        peak = highest(lambda t: moon_topocentric_altitude(julian_day(t), lat, lon)[0], night)
+        if peak and peak[1] > 0:
+            _, _, _, ra, dec = moon_position(julian_day(peak[0]))
+            d, az = where(peak[0], ra, dec)
+            view['aim'] = az
+            view['point'].append(['moon', f"Moon highest {fmt_time(peak[0], plan)} · {peak[1]:.0f}° {d} ({az}°) · {fraction * 100:.0f}% lit"])
+        view['point'].append(['moon', 'Keep the moon behind or beside you; side light shows relief'])
+        if not targets:
+            view['why'] = (f"The moon is only {fraction * 100:.0f}% lit; moonlit landscapes need at least 10%." if fraction < 0.1
+                           else 'The moon is not up after twilight tonight.')
+    else:
+        kp_max = line.get('kp_max')
+        view['aim'] = 0 if lat >= 0 else 180
+        view['point'].append(['aurora', f"Look {poleward}, low over the horizon, from somewhere dark"
+                              + (f" · Kp peak {kp_max:.1f} tonight, your threshold {aurora_kp:g}" if kp_max is not None else '')])
+        if not targets:
+            view['why'] = 'No astronomical darkness tonight.'
+        elif kp_max is not None and kp_max < aurora_kp:
+            view['why'] = f"Kp peaks at {kp_max:.1f} tonight, below your threshold of {aurora_kp:g}."
+    return view
 
 
 def condition_at(hours, t):
@@ -1061,6 +1149,7 @@ def bar_output(report, sun=None, lat=None, lon=None, clouds=None, kp=None, auror
             'moon_free_minutes': free, 'core_minutes': report['milky_way_core']['minutes'],
             'south': lat < 0, 'aurora_kp': aurora_kp,
             'timeline': line,
+            'view': subject_view(plan, lat, lon, mode, curated, line, kp, aurora_kp),
             'core_times': core_times(plan, lat, lon),
             'exposure': exposure(**optics) if optics else None,
             'week': week(lat, lon, day, clouds, fetched, tz_name, kp, aurora_kp, mode, curated, now) if extras else None,

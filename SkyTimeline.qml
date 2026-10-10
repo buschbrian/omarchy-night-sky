@@ -15,6 +15,13 @@ Item {
   property color sunColor: "#f2b347"
   property color moonColor: "#ece6d2"
   property color coreColor: "#72d6db"
+  property color radiantColor: "#b48cff"
+  // The subject view from the helper: which object to emphasise, its target windows, a radiant curve.
+  property var view: null
+  readonly property string focusKey: view ? view.focus : "core"
+  // The 10° guide gates the core and a shower radiant only.
+  readonly property bool guideTen: focusKey === "core" || focusKey === "radiant"
+  readonly property color guideTone: focusKey === "radiant" ? radiantColor : coreColor
   property var bandColors: ({ golden: "#dba254", blue: "#507fc4", twilight: "#354568", dark: "#141e33", day: "#8fb4d9" })
   // The right gutter holds the HZN / 10° marks here and the lane readouts below the chart.
   property real plotHeight: Style.space(100)
@@ -24,7 +31,8 @@ Item {
     { key: "sun", name: "Sun", short: "Sun", glyph: "󰖨", tone: sunColor },
     { key: "moon", name: "Moon", short: "Moon", glyph: "󰽢", tone: moonColor },
     { key: "core", name: "Milky Way core", short: "Core", glyph: "󰫢", tone: coreColor }
-  ]
+  ].concat(view && view.radiant ? [{ key: "radiant", name: view.radiant.name + " radiant", short: "Radiant", glyph: "☄", tone: radiantColor }] : [])
+  function curve(key) { return key === "radiant" ? (view && view.radiant ? view.radiant.curve : []) : timeline ? timeline.curves[key] : [] }
   readonly property var points: timeline ? timeline.curves.core : []
   property int pinnedIndex: -1
   property int hoverIndex: -1
@@ -37,8 +45,8 @@ Item {
   }
   readonly property real altitudeTop: {
     var high = 20
-    if (timeline) for (var key in timeline.curves)
-      for (var p of timeline.curves[key]) high = Math.max(high, p[1])
+    for (var s of series)
+      for (var p of curve(s.key)) high = Math.max(high, p[1])
     return Math.min(90, Math.max(30, Math.ceil((high + 5) / 15) * 15))
   }
   readonly property real altitudeBottom: -24
@@ -46,7 +54,7 @@ Item {
   activeFocusOnTab: true
   Accessible.role: Accessible.Slider
   Accessible.name: "Sky timeline"
-  Accessible.description: "Use left and right arrows to inspect time and the altitude of the sun, moon and Milky Way core. " + selectedTime + ". " + readout("sun") + ", " + readout("moon") + ", " + readout("core")
+  Accessible.description: "Use left and right arrows to inspect time and the altitude of the sun, moon and " + (focusKey === "radiant" ? "meteor radiant" : "Milky Way core") + ". " + selectedTime + ". " + series.map(function(s) { return readout(s.key) }).join(", ")
   Keys.onLeftPressed: move(-1)
   Keys.onRightPressed: move(1)
   Keys.onPressed: function(event) {
@@ -72,7 +80,7 @@ Item {
     return highest
   }
   function move(amount) { var next = selectedIndex + amount; hoverIndex = -1; pinnedIndex = Math.max(0, Math.min(points.length - 1, next)) }
-  function altitude(key) { return timeline && timeline.curves[key].length ? timeline.curves[key][selectedIndex][1] : null }
+  function altitude(key) { var c = curve(key); return c.length > selectedIndex ? c[selectedIndex][1] : null }
   function readout(key) { var a = altitude(key); return key + " " + (a === null ? "unavailable" : a.toFixed(1) + " degrees " + (a >= 0 ? "above horizon" : "below horizon")) }
   function rgba(c, alpha) { return Qt.rgba(c.r, c.g, c.b, alpha) }
   // One horizontal gradient through the middle of each sun-altitude band, so golden fades into blue into night.
@@ -172,6 +180,8 @@ Item {
         property int cursor: root.selectedIndex
         property real now: root.nowMs
         property var best: root.bestWindow
+        property var subject: root.view
+        onSubjectChanged: requestPaint()
         property real scaleTop: root.altitudeTop
         onChartChanged: requestPaint()
         onCursorChanged: requestPaint()
@@ -197,7 +207,7 @@ Item {
           var globe = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, 0, x, y, r + 1)
           globe.addColorStop(0, "#fff9e8"); globe.addColorStop(0.45, tone); globe.addColorStop(1, "#343b48")
           ctx.fillStyle = globe
-          if (key === "core") {
+          if (key === "core" || key === "radiant") {
             ctx.beginPath(); ctx.moveTo(x, y - r - 2); ctx.lineTo(x + 2, y - 2); ctx.lineTo(x + r + 2, y); ctx.lineTo(x + 2, y + 2)
             ctx.lineTo(x, y + r + 2); ctx.lineTo(x - 2, y + 2); ctx.lineTo(x - r - 2, y); ctx.lineTo(x - 2, y - 2); ctx.closePath(); ctx.fill()
           } else if (key === "sun") {
@@ -228,19 +238,31 @@ Item {
           for (var alt = 15; alt <= root.altitudeTop; alt += 15) { ctx.beginPath(); ctx.moveTo(0, yOf(alt)); ctx.lineTo(w, yOf(alt)); ctx.stroke() }
           for (var tick of chart.ticks) { ctx.beginPath(); ctx.moveTo(tick.at * w, 0); ctx.lineTo(tick.at * w, h); ctx.stroke() }
           ctx.strokeStyle = "rgba(230,237,245,0.55)"; ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(w, y0); ctx.stroke()
-          ctx.setLineDash([3, 5]); ctx.strokeStyle = root.rgba(root.coreColor, 0.35)
-          ctx.beginPath(); ctx.moveTo(0, yOf(10)); ctx.lineTo(w, yOf(10)); ctx.stroke(); ctx.setLineDash([])
+          if (root.guideTen) {
+            ctx.setLineDash([3, 5]); ctx.strokeStyle = root.rgba(root.guideTone, 0.35)
+            ctx.beginPath(); ctx.moveTo(0, yOf(10)); ctx.lineTo(w, yOf(10)); ctx.stroke(); ctx.setLineDash([])
+          }
+          // The subject's target windows: a soft wash in the focused object's colour.
+          var focusTone = root.focusKey === "moon" ? root.moonColor : root.focusKey === "radiant" ? root.radiantColor
+                          : root.focusKey === "core" ? root.coreColor : root.rgba(root.foreground, 1)
+          if (subject) for (var target of subject.targets) {
+            var wash = ctx.createLinearGradient(0, 0, 0, y0)
+            wash.addColorStop(0, root.rgba(focusTone, 0.16)); wash.addColorStop(1, root.rgba(focusTone, 0.02))
+            ctx.fillStyle = wash; ctx.fillRect(target.a * w, 0, (target.b - target.a) * w, y0)
+          }
           if (best) {
             var left = Math.max(0, (best.start_ms - chart.start_ms) / (chart.end_ms - chart.start_ms)) * w
             var right = Math.min(1, (best.end_ms - chart.start_ms) / (chart.end_ms - chart.start_ms)) * w
             ctx.fillStyle = best.level === "go" ? "rgba(76,175,122,0.12)" : "rgba(227,179,65,0.12)"; ctx.fillRect(left, 0, right - left, h)
             ctx.fillStyle = best.level === "go" ? "#4caf7a" : "#e3b341"; ctx.fillRect(left, 0, right - left, Style.space(3))
           }
+          // The subject's object is drawn strong; the others recede.
           for (var series of root.series) {
-            ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, y0); ctx.clip(); path(ctx, chart.curves[series.key], series.tone, 2.2, 0.9, false); ctx.restore()
-            ctx.save(); ctx.beginPath(); ctx.rect(0, y0, w, h - y0); ctx.clip(); path(ctx, chart.curves[series.key], series.tone, 1.4, 0.55, true); ctx.restore()
+            var focused = series.key === root.focusKey
+            ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, y0); ctx.clip(); path(ctx, root.curve(series.key), series.tone, focused ? 2.6 : 1.6, focused ? 1 : 0.45, false); ctx.restore()
+            ctx.save(); ctx.beginPath(); ctx.rect(0, y0, w, h - y0); ctx.clip(); path(ctx, root.curve(series.key), series.tone, 1.2, focused ? 0.6 : 0.3, true); ctx.restore()
           }
-          for (var usable of chart.core) {
+          if (root.focusKey === "core") for (var usable of chart.core) {
             ctx.save(); ctx.beginPath(); ctx.rect(usable.a * w, 0, (usable.b - usable.a) * w, y0); ctx.clip()
             path(ctx, chart.curves.core, root.coreColor, 4, 1, false); ctx.restore()
           }
@@ -277,7 +299,7 @@ Item {
         }
       }
       Text { x: canvas.x + canvas.width + Style.space(4); y: canvas.yOf(0) - implicitHeight / 2; text: "HZN"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-      Text { x: canvas.x + canvas.width + Style.space(4); y: canvas.yOf(10) - implicitHeight / 2; text: "10°"; color: root.coreColor; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+      Text { x: canvas.x + canvas.width + Style.space(4); y: canvas.yOf(10) - implicitHeight / 2; text: "10°"; visible: root.guideTen; color: root.guideTone; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
       Rectangle { anchors.fill: canvas; color: "transparent"; border.width: root.activeFocus ? 2 : 1; border.color: root.activeFocus ? root.coreColor : root.rgba(root.foreground, 0.15) }
     }
 
