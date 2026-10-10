@@ -8,11 +8,15 @@ import argparse
 from datetime import date, datetime, time, timedelta, timezone
 import json
 import math
+import os
 from pathlib import Path
 import sys
 import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
+
+LOCATIONS = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'omarchy/night-sky-locations.json'
+MODES = {'milky-way': 'Milky Way', 'meteors': 'Meteors', 'aurora': 'Aurora', 'moonlit': 'Moonlit landscapes'}
 
 OMARCHY_WEATHER = Path.home() / '.local/state/omarchy/settings/weather.json'
 
@@ -443,13 +447,16 @@ def timeline(plan, lat, lon, clouds=None, kp=None):
         moon.append(span('moon', cursor, w1))
 
     curves = {'sun': [], 'moon': [], 'core': []}
-    t = w0
-    while t <= w1 + timedelta(minutes=1):
+    times = []
+    samples = minute_range(w0, w1, 10)
+    if samples[-1] < w1:
+        samples.append(w1)
+    for t in samples:
+        times.append(clock(t))
         jd = julian_day(t)
         curves['sun'].append([frac(t), round(sun_altitude(t, lat, lon), 1)])
         curves['moon'].append([frac(t), round(moon_topocentric_altitude(jd, lat, lon)[0], 1)])
         curves['core'].append([frac(t), round(core_altitude(t, lat, lon), 1)])
-        t += timedelta(minutes=10)
 
     def at(key):
         t = marks.get(key)
@@ -487,7 +494,7 @@ def timeline(plan, lat, lon, clouds=None, kp=None):
                                **{k: hour.get(k) for k in ('total', 'low', 'mid', 'high', 'jet')}})
     window = dark or (sunset, end)
     in_dark = [c['total'] for c in clouds or []
-               if window[0] - timedelta(hours=1) < datetime.fromisoformat(c['time']).replace(tzinfo=timezone.utc) < window[1]]
+               if c.get('total') is not None and window[0] - timedelta(hours=1) < datetime.fromisoformat(c['time']).replace(tzinfo=timezone.utc) < window[1]]
 
     kp_bins = []
     for row in kp or []:
@@ -503,7 +510,7 @@ def timeline(plan, lat, lon, clouds=None, kp=None):
         t += timedelta(hours=1)
     return {'start_ms': int(w0.timestamp() * 1000), 'end_ms': int(w1.timestamp() * 1000),
             'sky': sky, 'moon': moon, 'core': [span('core', a, b) for a, b in plan['core_spans']],
-            'curves': curves, 'events': events, 'core_best': core_best, 'moon_dir': moon_dir,
+            'curves': curves, 'times': times, 'events': events, 'core_best': core_best, 'moon_dir': moon_dir,
             'clouds': cloud_bins if clouds else None,
             'cloud_pct': round(sum(in_dark) / len(in_dark)) if in_dark else None,
             'kp': kp_bins if kp else None,
@@ -552,19 +559,19 @@ def load_conditions(lat, lon, now=None):
         return [dict(time=t, **{k: h[f][i] for k, f in zip(keys, fields)}) for i, t in enumerate(h['time'])]
 
     forecast, fetched = cached_json(
-        f'forecast-{lat:.2f}-{lon:.2f}.json',
+        f'forecast-{lat:.4f}-{lon:.4f}.json',
         'https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode(
             {**where, 'forecast_days': 16, 'hourly': ','.join(fields)}),
         CACHE_TTL, now, parse_forecast)
     if not forecast:
         return None, None
-    aod, _ = cached_json(
-        f'aod-{lat:.2f}-{lon:.2f}.json',
+    aod, aod_fetched = cached_json(
+        f'aod-{lat:.4f}-{lon:.4f}.json',
         'https://air-quality-api.open-meteo.com/v1/air-quality?' + urllib.parse.urlencode(
             {**where, 'forecast_days': 7, 'hourly': 'aerosol_optical_depth'}),
         CACHE_TTL, now,
         lambda body: dict(zip(body['hourly']['time'], body['hourly']['aerosol_optical_depth'])))
-    return [dict(h, aod=(aod or {}).get(h['time'])) for h in forecast if h['total'] is not None], fetched
+    return [dict(h, aod=(aod or {}).get(h['time'])) for h in forecast], {'clouds': fetched, 'haze': aod_fetched}
 
 
 def load_bundled_curated():
@@ -625,23 +632,169 @@ def fmt_value(key, value, unit):
     return f'{value:.0f}{"" if unit in ("", "%", "°") else " "}{unit}'
 
 
-def shoot_verdict(plan, report, lat, lon, hours, fetched=None, kp_max=None, aurora_kp=AURORA_KP, now=None):
-    """go / marginal / no-go and the factor that sets it. Unavailable gating data caps the night
-    at marginal, stale data (over 6 h old) too; Kp only ever adds the aurora flag."""
+def source_time(fetched, name):
+    return fetched.get(name) if isinstance(fetched, dict) else fetched
+
+
+def source_status(fetched, available, now):
+    age = (now - datetime.fromisoformat(fetched)).total_seconds() if fetched else None
+    return {'updated': fetched, 'available': available, 'stale': age is None or age > 6 * 3600}
+
+
+def active_shower(plan, curated):
+    """The highest-ZHR curated shower active on this evening's date, or None."""
+    # The observing night starts on the evening date, even when its midpoint is after midnight.
+    day = evening_of(plan['phase_at'], plan['tz'])
+    showers = [e for e in curated or [] if e.get('kind') == 'meteor_shower'
+               and e.get('active_from', '9999') <= day.isoformat() <= e.get('active_to', '')
+               and e.get('radiant_ra_hours') is not None and e.get('radiant_dec_deg') is not None]
+    return max(showers, key=lambda e: (e.get('zhr') or 0, e['name']), default=None)
+
+
+def radiant_altitude(shower, t, lat, lon):
+    ra, dec = precess(shower['radiant_ra_hours'] * 15, shower['radiant_dec_deg'], t)
+    return altitude(ra, dec, julian_day(t), lat, lon)
+
+
+def target_windows(plan, lat, lon, mode, curated=None):
+    if mode == 'milky-way':
+        return plan['core_spans'], 'Milky Way core'
+    if mode == 'aurora':
+        return [plan['darkness']] if plan['darkness'] else [], 'Poleward horizon'
+    if mode == 'meteors':
+        shower = active_shower(plan, curated)
+        if not shower:
+            return [], 'No active curated shower'
+        def qualifies(t):
+            return radiant_altitude(shower, t, lat, lon) >= RADIANT_MIN_ALT
+        spans = plan['moon_free']
+        label = shower['name'] + (' (unverified)' if not shower.get('verified_on') else '')
+    else:
+        if not plan['sunset'] or not plan['sunrise']:
+            return [], 'No night interval'
+        spans = [(plan['sunset'], plan['sunrise'])]
+        def qualifies(t):
+            return (sun_altitude(t, lat, lon) <= CIVIL_TWILIGHT
+                    and moon_rise_set_margin(t, lat, lon) > 0 and phase_info(t)['fraction'] >= 0.1)
+        label = 'Moon above horizon, at least 10% lit'
+    out, step = [], timedelta(minutes=5)
+    for a, b in spans:
+        times = minute_range(a, b - step, 5)
+        for start, end in merge_runs(times, [qualifies(t + step / 2) for t in times], step):
+            out.append((start, min(end, b)))
+    return out, label
+
+
+def subject_view(plan, lat, lon, mode, curated, line, kp=None, aurora_kp=AURORA_KP):
+    """What the panel shows for the chosen subject: the object to emphasise, its target windows as
+    chart spans, a radiant curve for meteors, why there is no window, and where to point."""
+    targets, label = target_windows(plan, lat, lon, mode, curated)
+    w0, w1 = line['start_ms'], line['end_ms']
+
+    def frac(t):
+        return max(0.0, min(1.0, (t.timestamp() * 1000 - w0) / (w1 - w0)))
+
+    def at(x):
+        return datetime.fromtimestamp((w0 + x * (w1 - w0)) / 1000, timezone.utc)
+
+    def highest(fn, spans):
+        best = None
+        for a, b in spans:
+            for t in minute_range(a, b, 10):
+                alt = fn(t)
+                if best is None or alt > best[1]:
+                    best = (t, alt)
+        return best
+
+    def where(t, ra, dec):
+        az = azimuth(ra, dec, julian_day(t), lat, lon)
+        return compass(az), round(az)
+
+    night = [(plan['sunset'], plan['sunrise'])] if plan['sunset'] and plan['sunrise'] else []
+    view = {'mode': mode, 'focus': {'milky-way': 'core', 'meteors': 'radiant', 'moonlit': 'moon', 'aurora': 'sky'}[mode],
+            'targets': [{'a': frac(a), 'b': frac(b), 'start': fmt_time(a, plan), 'end': fmt_time(b, plan)} for a, b in targets],
+            'radiant': None, 'why': '', 'point': [], 'aim': None}
+    poleward = 'N' if lat >= 0 else 'S'
+    if mode == 'milky-way':
+        if line.get('core_best'):
+            view['aim'] = line['core_best']['az']
+        if not targets:
+            view['why'] = ('The core never clears 10° in moon-free darkness tonight.' if plan['darkness']
+                           else 'No astronomical darkness tonight.')
+    elif mode == 'meteors':
+        shower = active_shower(plan, curated)
+        if not shower:
+            view['why'] = 'No curated meteor shower is active tonight.'
+        else:
+            curve = [[x, round(radiant_altitude(shower, at(x), lat, lon), 1)] for x, _ in line['curves']['core']]
+            name = shower['name'] + ('' if shower.get('verified_on') else ' (unverified)')
+            view['radiant'] = {'name': name, 'zhr': shower.get('zhr'), 'curve': curve}
+            peak = highest(lambda t: radiant_altitude(shower, t, lat, lon), plan['moon_free'] or night)
+            if peak:
+                ra, dec = precess(shower['radiant_ra_hours'] * 15, shower['radiant_dec_deg'], peak[0])
+                d, az = where(peak[0], ra, dec)
+                view['aim'] = az
+                view['point'].append(['radiant', f"{name} radiant highest {fmt_time(peak[0], plan)} · {peak[1]:.0f}° {d} ({az}°)"
+                                      + (f" · ZHR {shower['zhr']}" if shower.get('zhr') else '')])
+                view['point'].append(['radiant', 'Aim 40–60° away from the radiant, about 50° up, for longer trails'])
+            if not targets:
+                view['why'] = (f"{name}: radiant stays below 10° in moon-free darkness." if plan['moon_free']
+                               else f"{name}: the moon is up through the dark hours.")
+    elif mode == 'moonlit':
+        fraction = phase_info(plan['phase_at'])['fraction']
+        peak = highest(lambda t: moon_topocentric_altitude(julian_day(t), lat, lon)[0], night)
+        if peak and peak[1] > 0:
+            _, _, _, ra, dec = moon_position(julian_day(peak[0]))
+            d, az = where(peak[0], ra, dec)
+            view['aim'] = az
+            view['point'].append(['moon', f"Moon highest {fmt_time(peak[0], plan)} · {peak[1]:.0f}° {d} ({az}°) · {fraction * 100:.0f}% lit"])
+        view['point'].append(['moon', 'Keep the moon behind or beside you; side light shows relief'])
+        if not targets:
+            view['why'] = (f"The moon is only {fraction * 100:.0f}% lit; moonlit landscapes need at least 10%." if fraction < 0.1
+                           else 'The moon is not up after twilight tonight.')
+    else:
+        kp_max = line.get('kp_max')
+        view['aim'] = 0 if lat >= 0 else 180
+        view['point'].append(['aurora', f"Look {poleward}, low over the horizon, from somewhere dark"
+                              + (f" · Kp peak {kp_max:.1f} tonight, your threshold {aurora_kp:g}" if kp_max is not None else '')])
+        if not targets:
+            view['why'] = 'No astronomical darkness tonight.'
+        elif kp_max is not None and kp_max < aurora_kp:
+            view['why'] = f"Kp peaks at {kp_max:.1f} tonight, below your threshold of {aurora_kp:g}."
+    return view
+
+
+def condition_at(hours, t):
+    return next((h for h in hours or [] if datetime.fromisoformat(h['time']).replace(tzinfo=timezone.utc)
+                 <= t < datetime.fromisoformat(h['time']).replace(tzinfo=timezone.utc) + timedelta(hours=1)), None)
+
+
+def kp_at(kp, t):
+    return next((k['kp'] for k in kp or [] if datetime.fromisoformat(k['time']).replace(tzinfo=timezone.utc)
+                 <= t < datetime.fromisoformat(k['time']).replace(tzinfo=timezone.utc) + timedelta(hours=3)), None)
+
+
+def shoot_verdict(plan, report, lat, lon, hours, fetched=None, kp_max=None, aurora_kp=AURORA_KP,
+                  now=None, mode=None, windows=None, curated=None):
     now = now or datetime.now(timezone.utc)
     specs = thresholds()
-    if not plan['darkness']:
-        return {'level': 'no-go', 'headline': 'No-go · no astronomical darkness', 'factors': [],
+    if windows is None:
+        windows = target_windows(plan, lat, lon, mode, curated)[0] if mode else plan['moon_free'] or ([plan['darkness']] if plan['darkness'] else [])
+    if not windows:
+        why = {'milky-way': 'no moon-free core window', 'meteors': 'no active shower window',
+               'moonlit': 'no moonlit window', 'aurora': 'no astronomical darkness'}.get(mode, 'no astronomical darkness')
+        return {'level': 'no-go', 'headline': 'No-go · ' + why, 'factors': [],
                 'incomplete': False, 'stale': False, 'aurora': False}
-    windows = plan['moon_free'] or [plan['darkness']]
     inside = hours_in(hours, windows)
+    samples = [t + timedelta(minutes=2.5) for a, b in windows for t in minute_range(a, b - timedelta(minutes=5), 5)]
+    covered = [condition_at(hours, t) for t in samples]
 
     def pick(key, fn):
-        values = [h[key] for h in inside if h.get(key) is not None]
+        values = [h[key] for h in covered if h and h.get(key) is not None]
         return fn(values) if values else None
 
     spread = [h['temp'] - h['dew'] for h in inside if h.get('temp') is not None and h.get('dew') is not None]
-    core = [core_altitude(t, lat, lon) for w in windows for t in minute_range(*w, 10)]
+    core = [core_altitude(t, lat, lon) for t in samples]
     values = {
         'moon_free_minutes': report['moon_free_minutes'],
         'cloud_cover_total': pick('total', lambda v: sum(v) / len(v)),
@@ -652,6 +805,12 @@ def shoot_verdict(plan, report, lat, lon, hours, fetched=None, kp_max=None, auro
         'gc_max_altitude': max(core) if core else None,
         'jet_stream': pick('jet', max),
     }
+    if mode:
+        specs['shoot_minutes'] = {'label': 'Target window', 'unit': 'min', 'better': 'higher',
+                                  'good': 60, 'marginal': 30, 'gates_verdict': True}
+        values['shoot_minutes'] = max((minutes(w) for w in windows), default=0)
+        specs['moon_free_minutes']['gates_verdict'] = False
+        specs['gc_max_altitude']['gates_verdict'] = mode == 'milky-way'
     factors, order = [], ['poor', 'marginal', 'good']
     for key, value in values.items():
         spec = specs[key]
@@ -661,12 +820,15 @@ def shoot_verdict(plan, report, lat, lon, hours, fetched=None, kp_max=None, auro
     rated = [f for f in gating if f['rating'] in order]
     worst = min(rated, key=lambda f: order.index(f['rating'])) if rated else None
     level = {'poor': 'no-go', 'marginal': 'marginal', 'good': 'go'}[worst['rating']] if worst else 'marginal'
-    incomplete = any(f['rating'] == 'unavailable' for f in gating)
-    stale = bool(fetched) and now - datetime.fromisoformat(fetched) > timedelta(hours=6)
+    incomplete = any(f['rating'] == 'unavailable' for f in gating) or not samples or any(
+        not h or any(h.get(k) is None for k in ('total', 'aod', 'gust')) for h in covered)
+    stale = any((isinstance(fetched, dict) and not source_time(fetched, name)) or
+                (source_time(fetched, name) and now - datetime.fromisoformat(source_time(fetched, name))
+                 > timedelta(hours=6)) for name in ('clouds', 'haze'))
     if (incomplete or stale) and level == 'go':
         level = 'marginal'
     if worst and worst['rating'] != 'good':
-        why = f"{SHORT[worst['key']]} {worst['value']}"
+        why = f"{SHORT.get(worst['key'], 'window')} {worst['value']}"
     elif incomplete:
         why = 'incomplete data'
     elif stale:
@@ -675,11 +837,69 @@ def shoot_verdict(plan, report, lat, lon, hours, fetched=None, kp_max=None, auro
         why = ''
     head = {'go': 'Go', 'marginal': 'Marginal', 'no-go': 'No-go'}[level]
     return {'level': level, 'headline': f'{head} · {why}' if why else head, 'factors': factors,
-            'incomplete': incomplete, 'stale': stale,
-            'aurora': kp_max is not None and kp_max >= aurora_kp}
+            'incomplete': incomplete, 'stale': stale, 'aurora': kp_max is not None and kp_max >= aurora_kp}
 
 
-def week(lat, lon, day, hours, fetched, tz_name, kp=None, aurora_kp=AURORA_KP):
+def best_window(plan, report, lat, lon, hours, fetched, kp, mode, curated, aurora_kp, now):
+    targets, subject = target_windows(plan, lat, lon, mode, curated)
+    specs = thresholds()
+    step = timedelta(minutes=5)
+    runs = []
+    for a, b in targets:
+        a = max(a, now)  # Never recommend an interval that has already passed.
+        times = minute_range(a, b - step, 5)
+        ratings = []
+        for t in times:
+            h = condition_at(hours, t + step / 2)
+            weather = [rate(h.get(key) if h else None, specs[spec]) for key, spec in
+                       [('total', 'cloud_cover_total'), ('gust', 'wind_gust'), ('aod', 'aerosol_optical_depth')]]
+            k = kp_at(kp, t + step / 2)
+            eligible = mode != 'aurora' or k is not None and k >= aurora_kp
+            ratings.append((eligible, weather))
+        for good_only in (True, False):
+            flags = [eligible and (all(r == 'good' for r in weather) if good_only else 'poor' not in weather)
+                     for eligible, weather in ratings]
+            runs.extend(merge_runs(times, flags, step))
+    candidates = []
+    for a, b in sorted(set(runs)):
+        if minutes((a, b)) < 30:
+            continue
+        v = shoot_verdict(plan, report, lat, lon, hours, fetched, aurora_kp=aurora_kp, now=now,
+                          mode=mode, windows=[(a, b)], curated=curated)
+        if mode == 'aurora':
+            status = source_status(source_time(fetched, 'kp'), bool(kp), now)
+            v['stale'] = v['stale'] or status['stale']
+            if status['stale'] and v['level'] == 'go':
+                v.update(level='marginal', headline='Marginal · stale Kp data')
+        candidates.append((v, a, b))
+    best = max(candidates, key=lambda x: ({'go': 2, 'marginal': 1, 'no-go': 0}[x[0]['level']],
+                                         not x[0]['incomplete'] and not x[0]['stale'],
+                                         minutes((x[1], x[2])), -x[1].timestamp()), default=None)
+    if not best:
+        return None
+    v, a, b = best
+    mid = a + (b - a) / 2
+    direction = 'N' if lat >= 0 else 'S'
+    if mode == 'milky-way':
+        direction = compass(azimuth(GC_RA_DEG, GC_DEC_DEG, julian_day(mid), lat, lon))
+    elif mode == 'moonlit':
+        _, _, _, ra, dec = moon_position(julian_day(mid))
+        direction = compass(azimuth(ra, dec, julian_day(mid), lat, lon))
+    elif mode == 'meteors':
+        direction = 'wide sky'
+    cloud = next((f['value'] for f in v['factors'] if f['key'] == 'cloud_cover_total'), '—')
+    # The verdict already names clouds when they decide it.
+    clouds = '' if f'clouds {cloud}' in v['headline'] else f' · clouds {cloud}'
+    return {'start': iso(a, plan['tz']), 'end': iso(b, plan['tz']), 'start_ms': int(a.timestamp() * 1000),
+            'end_ms': int(b.timestamp() * 1000), 'minutes': round(minutes((a, b))), 'level': v['level'],
+            'headline': f"{fmt_time(a, plan)}–{fmt_time(b, plan)} · {v['headline']}{clouds} · {direction}",
+            'subject': subject, 'direction': direction, 'factors': v['factors'],
+            'incomplete': v['incomplete'], 'stale': v['stale']}
+
+
+def week(lat, lon, day, hours, fetched, tz_name, kp=None, aurora_kp=AURORA_KP,
+         mode=None, curated=None, now=None):
+    now = now or datetime.now(timezone.utc)
     out = []
     for d in range(7):
         night = day + timedelta(days=d)
@@ -688,12 +908,20 @@ def week(lat, lon, day, hours, fetched, tz_name, kp=None, aurora_kp=AURORA_KP):
         dark = [plan['darkness']] if plan['darkness'] else []
         kp_in = [k['kp'] for k in kp or []
                  if dark and dark[0][0] - timedelta(hours=3) < datetime.fromisoformat(k['time']).replace(tzinfo=timezone.utc) < dark[0][1]]
-        v = shoot_verdict(plan, rep, lat, lon, hours, fetched, max(kp_in) if kp_in else None, aurora_kp)
+        v = shoot_verdict(plan, rep, lat, lon, hours, fetched, max(kp_in) if kp_in else None, aurora_kp,
+                          now=now, mode=mode, curated=curated)
+        best = best_window(plan, rep, lat, lon, hours, fetched, kp, mode, curated, aurora_kp, now) if mode else None
         cloud = next((f['value'] for f in v['factors'] if f['key'] == 'cloud_cover_total'), '—')
         out.append({'date': night.isoformat(), 'day': night.strftime('%a'), 'level': v['level'],
                     'headline': v['headline'], 'incomplete': v['incomplete'], 'aurora': v['aurora'],
-                    'moon_free_minutes': rep['moon_free_minutes'], 'cloud': cloud,
+                    'moon_free_minutes': rep['moon_free_minutes'], 'cloud': cloud, 'best_window': best,
                     'illumination_pct': rep['moon']['illumination_pct'], 'glyph': rep['moon']['glyph']})
+    eligible = [n for n in out if n['best_window'] and n['best_window']['level'] != 'no-go'
+                and not n['best_window']['incomplete'] and not n['best_window']['stale']]
+    best = max(eligible, key=lambda n: ({'go': 2, 'marginal': 1}[n['best_window']['level']],
+                                       n['best_window']['minutes']), default=None)
+    for n in out:
+        n['recommended'] = n is best
     return out
 
 
@@ -849,25 +1077,10 @@ def exposure(focal=None, aperture=None, pitch=None, crop=1.0):
     return out
 
 
-def load_kp(now=None):
-    """Planetary Kp in 3-hour bins, a day back through NOAA SWPC's 3-day forecast; cached an hour."""
+def load_kp(now=None, with_fetched=False):
     now = now or datetime.now(timezone.utc)
-    path = CACHE / 'kp.json'
-    try:
-        cached = json.loads(path.read_text())
-        if now - datetime.fromisoformat(cached['fetched']) < CACHE_TTL:
-            return cached['rows']
-    except (OSError, ValueError, KeyError):
-        cached = None
-    try:
-        with urllib.request.urlopen(urllib.request.Request(KP_URL, headers={'User-Agent': AGENT}),
-                                    timeout=8) as response:
-            rows = kp_rows(json.load(response), now)
-    except (OSError, ValueError, KeyError, TypeError):
-        return cached['rows'] if cached else None
-    CACHE.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({'fetched': now.isoformat(), 'rows': rows}))
-    return rows
+    data, fetched = cached_json('kp-series.json', KP_URL, CACHE_TTL, now, lambda body: kp_rows(body, now))
+    return (data, fetched) if with_fetched else data
 
 
 def kp_rows(products, now):
@@ -881,8 +1094,12 @@ def kp_rows(products, now):
 
 
 def bar_output(report, sun=None, lat=None, lon=None, clouds=None, kp=None, aurora_kp=AURORA_KP,
-               fetched=None, curated=None, optics=None, extras=True):
-    plan = report.pop('_plan')
+               fetched=None, curated=None, optics=None, extras=True, mode='milky-way', now=None, location_name=None,
+               kp_fetched=None, saved_locations=None):
+    now = now or datetime.now(timezone.utc)
+    if isinstance(fetched, dict):
+        fetched = {**fetched, 'kp': kp_fetched}
+    plan = report['_plan']
     moon = report['moon']
     free = report['moon_free_minutes']
     if report['verdict_class'] == 'none':
@@ -900,32 +1117,48 @@ def bar_output(report, sun=None, lat=None, lon=None, clouds=None, kp=None, auror
         night += f' {AURORA_GLYPH}'
         notes.append(f"Aurora chance: Kp {line['kp_max']:.1f} forecast tonight (camera, {'north' if lat >= 0 else 'south'} horizon)")
     text = f"{sun['text']}  {night}" if sun else night
-    shoot = (shoot_verdict(plan, report, lat, lon, clouds, fetched, line['kp_max'] if line else None, aurora_kp)
+    shoot = (shoot_verdict(plan, report, lat, lon, clouds, fetched, line['kp_max'] if line else None, aurora_kp, now=now, mode=mode, curated=curated)
              if lat is not None else None)
 
     def clock(value):
         return datetime.fromisoformat(value).strftime('%H:%M') if value else '--'
 
+    subject = target_windows(plan, lat, lon, mode, curated)[1] if lat is not None else report['verdict']
+    summary_line = MODES[mode] + ' · ' + subject if lat is not None else report['verdict']
     lines = ([shoot['headline'], ''] if shoot else []) + ([sun['tooltip'], ''] if sun else []) + [
-        report['verdict'],
+        summary_line,
         f"{moon['phase']}, {moon['illumination_pct']}% lit   rise {clock(moon['moonrise'])}   set {clock(moon['moonset'])}",
         *notes, '', 'Click for the night panel']
     out = {'text': text, 'tooltip': '\n'.join(lines), 'class': shoot['level'] if shoot else report['verdict_class']}
     if lat is not None:
         day = date.fromisoformat(report['date'])
+        best = best_window(plan, report, lat, lon, clouds, fetched, kp, mode, curated, aurora_kp, now)
         tz_name = plan['tz'].key
+        target = target_windows(plan, lat, lon, mode, curated)[0]
+        selected_hours = hours_in(clouds, target)
         out['panel'] = {
-            'date': report['date'], 'verdict': report['verdict'], 'notes': notes, 'shoot': shoot,
+            'date': report['date'], 'verdict': summary_line, 'subject': subject, 'mode': mode,
+            'mode_label': MODES[mode],
+            'location': {**report['location'], 'name': location_name or f'{lat:.3f}, {lon:.3f}'},
+            'best_window': best, 'saved_locations': saved_locations or [],
+            'sources': {
+                'clouds': source_status(source_time(fetched, 'clouds'), any(h.get('total') is not None for h in selected_hours), now),
+                'haze': source_status(source_time(fetched, 'haze'), any(h.get('aod') is not None for h in selected_hours), now),
+                'kp': source_status(kp_fetched, bool(kp), now)}, 'notes': notes, 'shoot': shoot,
             'moon': {**moon, 'moonrise': clock(moon['moonrise']), 'moonset': clock(moon['moonset'])},
             'moon_free_minutes': free, 'core_minutes': report['milky_way_core']['minutes'],
             'south': lat < 0, 'aurora_kp': aurora_kp,
             'timeline': line,
+            'view': subject_view(plan, lat, lon, mode, curated, line, kp, aurora_kp),
             'core_times': core_times(plan, lat, lon),
             'exposure': exposure(**optics) if optics else None,
-            'week': week(lat, lon, day, clouds, fetched, tz_name, kp, aurora_kp) if extras else None,
+            'week': week(lat, lon, day, clouds, fetched, tz_name, kp, aurora_kp, mode, curated, now) if extras else None,
             'events': sky_events(lat, lon, day, tz_name, curated or []) if extras else None,
-            'fetched': fetched,
+            'fetched': source_time(fetched, 'clouds'),
         }
+        place_line = f"{out['panel']['location']['name']} · {tz_name} · {MODES[mode]}"
+        best_line = ('Best interval: ' + best['headline']) if best else 'No future usable interval'
+        out['tooltip'] = place_line + '\n' + best_line + '\n\n' + out['tooltip']
     return out
 
 
@@ -979,12 +1212,48 @@ def read_location():
     return None
 
 
+def saved_places():
+    try:
+        items = json.loads(LOCATIONS.read_text())
+        if not isinstance(items, list):
+            return []
+        return [validate_place(p['name'], p['lat'], p['lon'], p['tz']) for p in items]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def validate_place(name, lat, lon, tz):
+    lat, lon = float(lat), float(lon)
+    if not name.strip() or len(name) > 80 or not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        raise ValueError('Enter a name and valid latitude / longitude.')
+    try:
+        ZoneInfo(tz)
+    except (KeyError, ValueError):
+        raise ValueError('Use an IANA time zone, such as America/Denver.') from None
+    return {'name': name.strip(), 'lat': lat, 'lon': lon, 'tz': tz}
+
+
+def write_places(places):
+    LOCATIONS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = LOCATIONS.with_suffix('.tmp')
+    tmp.write_text(json.dumps(places) + '\n')
+    tmp.chmod(0o600)
+    tmp.replace(LOCATIONS)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Tonight's sky: moon, dark window and Milky Way core")
     ap.add_argument('--date', type=date.fromisoformat, help='evening date, YYYY-MM-DD (default today)')
     ap.add_argument('--lat', type=float)
     ap.add_argument('--lon', type=float)
     ap.add_argument('--tz', default=DEFAULT_TZ)
+    ap.add_argument('--mode', choices=MODES, default='milky-way')
+    ap.add_argument('--location-name')
+    ap.add_argument('--saved-location')
+    ap.add_argument('--save-location', help='save the supplied coordinates and time zone under this name')
+    ap.add_argument('--remove-location', help='remove a saved place by name')
+    ap.add_argument('--list-locations', action='store_true')
+    ap.add_argument('--compare-locations', action='store_true', help='compare current and saved places for the same evening date')
     ap.add_argument('--bar', action='store_true', help='short JSON for the bar widget')
     ap.add_argument('--sun', action='store_true', help='next sunrise/sunset and golden hour as JSON')
     ap.add_argument('--offline', action='store_true', help='with --bar: skip the cloud and Kp fetches')
@@ -994,6 +1263,30 @@ def main(argv=None):
     ap.add_argument('--crop', type=float, default=1.0, help='crop factor (1 for full frame)')
     ap.add_argument('--aurora-kp', type=float, default=AURORA_KP, help='Kp that flags an aurora chance (default 6)')
     args = ap.parse_args(argv)
+    places = saved_places()
+    if args.list_locations:
+        print(json.dumps(places))
+        return
+    if args.save_location or args.remove_location:
+        try:
+            if args.save_location:
+                place = validate_place(args.save_location, args.lat, args.lon, args.tz)
+                places = [p for p in places if p['name'] != place['name']] + [place]
+            else:
+                places = [p for p in places if p['name'] != args.remove_location]
+            write_places(places)
+            print(json.dumps({'saved_locations': places}))
+        except (OSError, ValueError, TypeError) as e:
+            print(json.dumps({'error': str(e)}))
+        return
+    if args.saved_location:
+        place = next((p for p in places if p['name'] == args.saved_location), None)
+        if place is None:
+            # A removed place named in the widget settings falls back rather than blanking the bar.
+            print(f'night-sky: saved location {args.saved_location!r} not found; using the configured location',
+                  file=sys.stderr)
+        else:
+            args.lat, args.lon, args.tz, args.location_name = place['lat'], place['lon'], place['tz'], place['name']
     if (args.lat is None) != (args.lon is None):
         ap.error('--lat and --lon go together')
     here = (args.lat, args.lon) if args.lat is not None else read_location()
@@ -1004,6 +1297,36 @@ def main(argv=None):
         print()
         return
     lat, lon = here
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        ap.error('Latitude / longitude out of range')
+    try:
+        ZoneInfo(args.tz)
+    except (KeyError, ValueError):
+        ap.error('Invalid IANA time zone')
+    if not args.location_name and args.lat is None:
+        try:
+            args.location_name = json.loads(OMARCHY_WEATHER.read_text()).get('name')
+        except (OSError, ValueError):
+            pass
+    if args.compare_locations:
+        now_utc = datetime.now(timezone.utc)
+        evening = args.date or date.fromisoformat(current_night(lat, lon, now_utc.astimezone(ZoneInfo(args.tz)), args.tz)['date'])
+        current = {'name': args.location_name or 'Current location', 'lat': lat, 'lon': lon, 'tz': args.tz}
+        candidates = [current] + [p for p in places if p != current]
+        curated = load_bundled_curated() if args.offline else load_curated()
+        kp, kp_fetched = (None, None) if args.offline else load_kp(with_fetched=True)
+        comparison = []
+        for place in candidates:
+            rep = tonight(place['lat'], place['lon'], evening, place['tz'])
+            hours, fetched = (None, None) if args.offline else load_conditions(place['lat'], place['lon'])
+            out = bar_output(rep, lat=place['lat'], lon=place['lon'], clouds=hours, kp=kp,
+                             aurora_kp=args.aurora_kp, fetched=fetched, curated=curated, extras=False,
+                             mode=args.mode, now=now_utc, kp_fetched=kp_fetched, location_name=place['name'])
+            panel = out['panel']
+            comparison.append({'location': panel['location'], 'date': panel['date'], 'shoot': panel['shoot'],
+                               'best_window': panel['best_window'], 'sources': panel['sources']})
+        print(json.dumps({'comparison': comparison}, ensure_ascii=False))
+        return
     if args.sun:
         now = datetime.now(ZoneInfo(args.tz))
         if args.date:
@@ -1019,11 +1342,12 @@ def main(argv=None):
         report = current_night(lat, lon, now, args.tz)
     if args.bar:
         hours, fetched = (None, None) if args.offline else load_conditions(lat, lon)
-        kp = None if args.offline else load_kp()
+        kp, kp_fetched = (None, None) if args.offline else load_kp(with_fetched=True)
         optics = {'focal': args.focal, 'aperture': args.aperture, 'pitch': args.pitch, 'crop': args.crop}
         out = bar_output(report, sun_report(lat, lon, now, args.tz), lat, lon, hours, kp, args.aurora_kp,
                          fetched, load_curated() if not args.offline else load_bundled_curated(),
-                         optics if args.focal else None)
+                         optics if args.focal else None, mode=args.mode, location_name=args.location_name,
+                         kp_fetched=kp_fetched, saved_locations=places)
     else:
         out = {k: v for k, v in report.items() if k != '_plan'}
     json.dump(out, sys.stdout, indent=None if args.bar else 2, ensure_ascii=False)
