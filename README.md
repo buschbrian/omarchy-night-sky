@@ -53,6 +53,14 @@ To open the panel from a key, bind `omarchy-shell buschbrian.night-sky toggle`. 
 
 The helper supports `--save-location NAME --lat LAT --lon LON --tz ZONE`, `--list-locations`, `--remove-location NAME`, `--saved-location NAME`, and `--compare-locations`. `--mode` selects the same four subjects. Comparisons reuse the forecast caches and respect `--offline`.
 
+## Remove
+
+```bash
+omarchy plugin remove buschbrian.night-sky
+```
+
+This removes the plugin checkout and its bar entry. Saved places in `~/.config/omarchy/night-sky-locations.json` and the cache in `~/.cache/night-sky/` are left in place; delete them by hand if you want them gone.
+
 ## Settings
 
 | Setting | Default | |
