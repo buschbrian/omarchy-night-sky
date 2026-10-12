@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "buschbrian.night-sky",
   "name": "Night sky",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": "Brian Busch",
   "license": "MIT",
-  "description": "Next sunrise/sunset, moon phase and moon-free dark hours in one pill; click for a sky chart (golden, blue, twilight, night; sun, moon and Milky Way core altitude) with cloud and aurora lanes.",
+  "description": "Next sunrise/sunset, moon phase and moon-free dark hours in one pill; click for a shoot verdict, best interval, sky chart, week and events, and saved places for Milky Way, meteor, aurora and moonlit photography.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "Widget.qml"
@@ -22,7 +22,7 @@
       { "key": "mode", "type": "enum", "label": "Photography mode", "options": ["milky-way", "meteors", "aurora", "moonlit"], "defaultValue": "milky-way" },
       { "key": "locationName", "type": "string", "label": "Location name", "defaultValue": "" },
       { "key": "timezone", "type": "string", "label": "Time zone", "defaultValue": "", "description": "IANA zone, e.g. America/Denver. Empty uses the system time zone." },
-      { "key": "savedLocation", "type": "string", "label": "Default saved location", "defaultValue": "", "description": "Name saved in the Locations tab. Empty uses the coordinates above or the weather location." },
+      { "key": "savedLocation", "type": "string", "label": "Default saved location", "defaultValue": "", "description": "Name saved in the Places tab. Empty uses the coordinates above or the weather location." },
       { "key": "auroraKp", "type": "integer", "label": "Aurora Kp", "min": 3, "max": 9, "step": 1, "defaultValue": 6, "description": "Kp that flags an aurora chance. About 6 near 40-45° latitude, lower further poleward." },
       { "key": "network", "type": "boolean", "label": "Clouds and Kp", "defaultValue": true, "description": "Fetch hourly cloud cover (Open-Meteo) and planetary Kp (NOAA SWPC), at most once an hour." },
       { "key": "focalLength", "type": "integer", "label": "Lens focal length (mm)", "min": 0, "max": 600, "step": 1, "defaultValue": 0, "description": "For the exposure helper. 0 hides it." },
