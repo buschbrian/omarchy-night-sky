@@ -60,7 +60,7 @@ The helper supports `--save-location NAME --lat LAT --lon LON --tz ZONE`, `--lis
 | Latitude / Longitude | empty | Decimal degrees. Empty uses the location set in Omarchy's weather panel. |
 | Photography mode | milky-way | Default subject; change it in the panel during a session. |
 | Location name / Time zone | empty | Name for configured coordinates; IANA zone, e.g. America/Denver. Empty zone uses the system zone. |
-| Default saved location | empty | Exact name saved in the Locations tab; empty uses configured coordinates or weather. A name that no longer exists falls back to those. |
+| Default saved location | empty | Exact name saved in the Places tab; empty uses configured coordinates or weather. A name that no longer exists falls back to those. |
 | Aurora Kp | 6 | Kp that flags an aurora chance. About 6 near 40–45° latitude; lower further poleward. |
 | Clouds and Kp | on | Off keeps the widget fully offline (astronomy only). |
 | Lens focal length, aperture, pixel pitch, crop factor | off | For the exposure helper. Focal length alone gives the 500 rule; add aperture and pixel pitch for the NPF rule at the core's declination. |
