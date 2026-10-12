@@ -489,6 +489,27 @@ class SavedLocations(unittest.TestCase):
             sky.main(args)
         return json.loads(out.getvalue())
 
+    def test_location_files_are_never_world_readable(self):
+        import os
+        old = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as d, patch.object(sky, 'LOCATIONS', Path(d) / 'places.json'), \
+                    patch.object(sky, 'CACHE', Path(d) / 'cache'):
+                real = os.open
+                modes = []
+                with patch('os.open', lambda *a, **k: (modes.append(a[2] if len(a) > 2 else None), real(*a, **k))[1]):
+                    sky.write_places([sky.validate_place('P', 40, -111, 'America/Denver')])
+                self.assertEqual(modes, [0o600])
+                (Path(d) / 'cache').mkdir(mode=0o755)
+                with patch('urllib.request.urlopen', side_effect=OSError):
+                    sky.cached_json('x.json', 'http://invalid', timedelta(hours=1), datetime.now(), lambda b: b)
+                from io import BytesIO
+                with patch('urllib.request.urlopen', return_value=BytesIO(b'{}')):
+                    sky.cached_json('x.json', 'http://invalid', timedelta(hours=1), datetime.now(), lambda b: b)
+                self.assertEqual(sky.CACHE.stat().st_mode & 0o777, 0o700)
+        finally:
+            os.umask(old)
+
     def test_save_replace_remove_and_private_file(self):
         with tempfile.TemporaryDirectory() as d, patch.object(sky, 'LOCATIONS', Path(d) / 'places.json'):
             args = ['--save-location', 'Test place', '--lat', '40', '--lon', '-111', '--tz', 'America/Denver']

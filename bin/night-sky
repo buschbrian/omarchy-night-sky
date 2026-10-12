@@ -540,7 +540,8 @@ def cached_json(name, url, ttl, now, parse):
             data = parse(json.load(r))
     except (OSError, ValueError, KeyError, TypeError):
         return (cached['data'], cached['fetched']) if cached else (None, None)
-    CACHE.mkdir(parents=True, exist_ok=True)
+    CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    CACHE.chmod(0o700)
     path.write_text(json.dumps({'fetched': now.isoformat(), 'data': data}))
     return data, now.isoformat()
 
@@ -1236,8 +1237,10 @@ def validate_place(name, lat, lon, tz):
 def write_places(places):
     LOCATIONS.parent.mkdir(parents=True, exist_ok=True)
     tmp = LOCATIONS.with_suffix('.tmp')
-    tmp.write_text(json.dumps(places) + '\n')
-    tmp.chmod(0o600)
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write(json.dumps(places) + '\n')
     tmp.replace(LOCATIONS)
 
 
